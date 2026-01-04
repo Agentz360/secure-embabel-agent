@@ -33,6 +33,9 @@ class SpringVectorStoreVectorSearch(
     private val vectorStore: VectorStore,
 ) : VectorSearch {
 
+    override fun supportsType(type: String): Boolean =
+        type.equals("Chunk", ignoreCase = true)
+
     override fun <T : Retrievable> vectorSearch(
         request: TextSimilaritySearchRequest,
         clazz: Class<T>,

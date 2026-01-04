@@ -13,19 +13,15 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package com.embabel.agent.core
+package com.embabel.agent.domain.library
 
-/**
- * If this value is false, we cannot create new instances
- * of this type: For example, it's a reference.
- */
-@Target(AnnotationTarget.CLASS)
-@Retention(AnnotationRetention.RUNTIME)
-@MustBeDocumented
-annotation class CreationPermitted(
+import com.fasterxml.jackson.databind.annotation.JsonDeserialize
 
-    /**
-     * Whether creation of instances of this type is permitted.
-     */
-    val value: Boolean,
-)
+@JsonDeserialize(`as` = PersonImpl::class)
+interface Person {
+
+    val name: String
+
+}
+
+data class PersonImpl(override val name: String) : Person

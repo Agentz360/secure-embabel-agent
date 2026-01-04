@@ -22,16 +22,59 @@ import com.embabel.common.core.types.TextSimilaritySearchRequest
 
 /**
  * Tag interface for search operations
- * Concrete implementations implement one or more subinterfaces
+ * Concrete implementations are RAG building blocks that
+ * implement one or more subinterfaces and
+ * are easy to expose to LLMs via tools
  */
 interface SearchOperations
 
 /**
- * RAG building blocks
- * Implemented by types that can search for chunks or other retrievables
- * Ease to expose to LLMs via tools
+ * Supports listing supported retrievable types
  */
-interface VectorSearch : SearchOperations {
+interface TypeRetrievalOperations : SearchOperations {
+
+    /**
+     * Is this type supported?
+     * @param type the type name of the retrievable
+     * Normally matches the simple class name of the retrievable type
+     * or the name of a schema type
+     * @return true if supported
+     */
+    fun supportsType(type: String): Boolean
+}
+
+
+/**
+ * Supports retrieval of retrievables by ID
+ */
+interface FinderOperations : TypeRetrievalOperations {
+
+    /**
+     * Retrieve an entity by its ID
+     * Core finder support not necessarily exposed as LLM tool.
+     */
+    fun <T> findById(
+        id: String,
+        clazz: Class<T>,
+    ): T?
+
+    /**
+     * Retrieve an entity by its ID and type name
+     * @param id the ID of the retrievable
+     * @param type the type name of the retrievable
+     * Normally matches the simple class name of the retrievable type
+     * or the name of a schema type
+     */
+    fun <T : Retrievable> findById(
+        id: String,
+        type: String
+    ): T?
+}
+
+/**
+ * Traditional RAG vector search
+ */
+interface VectorSearch : TypeRetrievalOperations {
 
     /**
      * Perform classic vector search
@@ -43,6 +86,9 @@ interface VectorSearch : SearchOperations {
 
 }
 
+/**
+ * Full-text search using Lucene query syntax
+ */
 interface TextSearch : SearchOperations {
     /**
      * Performs full-text search using Lucene query syntax.
@@ -136,4 +182,4 @@ interface ResultExpander : SearchOperations {
 /**
  * Commonly implemented set of search functionality
  */
-interface CoreSearchOperations : VectorSearch, TextSearch
+interface CoreSearchOperations : FinderOperations, VectorSearch, TextSearch

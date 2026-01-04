@@ -16,6 +16,7 @@
 package com.embabel.agent.rag.tools
 
 import com.embabel.agent.rag.model.Chunk
+import com.embabel.agent.rag.model.Retrievable
 import com.embabel.agent.rag.model.SimpleEntityData
 import com.embabel.agent.rag.service.*
 import com.embabel.common.core.types.SimpleSimilaritySearchResult
@@ -158,8 +159,9 @@ class ToolishRagTest {
 
             val toolInstances = toolishRag.toolInstances()
 
-            assertEquals(1, toolInstances.size)
-            assertTrue(toolInstances[0] is VectorSearchTools)
+            assertEquals(2, toolInstances.size)
+            assertTrue(toolInstances.any { it is TypeRetrievalTools })
+            assertTrue(toolInstances.any { it is VectorSearchTools })
         }
 
         @Test
@@ -190,9 +192,28 @@ class ToolishRagTest {
 
             val toolInstances = toolishRag.toolInstances()
 
-            assertEquals(2, toolInstances.size)
+            assertEquals(4, toolInstances.size)
+            assertTrue(toolInstances.any { it is TypeRetrievalTools })
+            assertTrue(toolInstances.any { it is FinderTools })
             assertTrue(toolInstances.any { it is VectorSearchTools })
             assertTrue(toolInstances.any { it is TextSearchTools })
+        }
+
+        @Test
+        fun `should add RetrievalTools when searchOperations is RetrievalOperations`() {
+            val retrievalOps = mockk<FinderOperations>()
+
+            val toolishRag = ToolishRag(
+                name = "test-rag",
+                description = "Test RAG",
+                searchOperations = retrievalOps
+            )
+
+            val toolInstances = toolishRag.toolInstances()
+
+            assertEquals(2, toolInstances.size)
+            assertTrue(toolInstances.any { it is TypeRetrievalTools })
+            assertTrue(toolInstances.any { it is FinderTools })
         }
     }
 
@@ -545,7 +566,7 @@ class ToolishRagTest {
             )
 
             val toolInstances = toolishRag.toolInstances()
-            assertEquals(2, toolInstances.size)
+            assertEquals(4, toolInstances.size)
 
             // Get and use VectorSearchTools
             val vectorTools = toolInstances.filterIsInstance<VectorSearchTools>().first()
@@ -855,6 +876,93 @@ class ToolishRagTest {
             assertTrue(capturedEvent != null)
             assertEquals(1, capturedEvent!!.results.size)
             assertEquals(0.9, capturedEvent!!.results[0].score)
+        }
+    }
+
+    @Nested
+    inner class TypeRetrievalToolsTests {
+
+        @Test
+        fun `isTypeSupported should return supported when type is supported`() {
+            val typeRetrievalOps = mockk<TypeRetrievalOperations>()
+
+            every { typeRetrievalOps.supportsType("Chunk") } returns true
+
+            val tools = TypeRetrievalTools(typeRetrievalOps)
+            val result = tools.isTypeSupported("Chunk")
+
+            assertEquals("Type 'Chunk' is supported", result)
+        }
+
+        @Test
+        fun `isTypeSupported should return not supported when type is not supported`() {
+            val typeRetrievalOps = mockk<TypeRetrievalOperations>()
+
+            every { typeRetrievalOps.supportsType("Chunk") } returns false
+
+            val tools = TypeRetrievalTools(typeRetrievalOps)
+            val result = tools.isTypeSupported("Chunk")
+
+            assertEquals("Type 'Chunk' is not supported by this store", result)
+        }
+    }
+
+    @Nested
+    inner class FinderToolsTests {
+
+        @Test
+        fun `findById should return formatted result when found`() {
+            val retrievalOps = mockk<FinderOperations>()
+            val chunk = createChunk("chunk1", "Test content")
+
+            every { retrievalOps.supportsType("Chunk") } returns true
+            every { retrievalOps.findById<Retrievable>("chunk1", "Chunk") } returns chunk
+
+            val tools = FinderTools(retrievalOps)
+            val result = tools.findById("chunk1", "Chunk")
+
+            assertTrue(result.contains("Found"))
+            assertTrue(result.contains("chunk1"))
+            assertTrue(result.contains("chunk: Test content"))
+        }
+
+        @Test
+        fun `findById should return not found message when item not found`() {
+            val retrievalOps = mockk<FinderOperations>()
+
+            every { retrievalOps.supportsType("Chunk") } returns true
+            every { retrievalOps.findById<Retrievable>("nonexistent", "Chunk") } returns null
+
+            val tools = FinderTools(retrievalOps)
+            val result = tools.findById("nonexistent", "Chunk")
+
+            assertEquals("No item found with id 'nonexistent' of type 'Chunk'", result)
+        }
+
+        @Test
+        fun `findById should return error when type not supported`() {
+            val retrievalOps = mockk<FinderOperations>()
+
+            every { retrievalOps.supportsType("Chunk") } returns false
+
+            val tools = FinderTools(retrievalOps)
+            val result = tools.findById("id1", "Chunk")
+
+            assertTrue(result.contains("Type 'Chunk' is not supported"))
+        }
+
+        @Test
+        fun `findById should work with entity types`() {
+            val retrievalOps = mockk<FinderOperations>()
+            val entity = createEntity("entity1", "Test Entity")
+
+            every { retrievalOps.supportsType("SimpleEntityData") } returns true
+            every { retrievalOps.findById<Retrievable>("entity1", "SimpleEntityData") } returns entity
+
+            val tools = FinderTools(retrievalOps)
+            val result = tools.findById("entity1", "SimpleEntityData")
+
+            assertTrue(result.contains("Found SimpleEntityData with id 'entity1'"))
         }
     }
 }

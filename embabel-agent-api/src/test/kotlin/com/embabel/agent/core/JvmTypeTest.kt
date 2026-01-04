@@ -16,10 +16,7 @@
 package com.embabel.agent.core
 
 import com.fasterxml.jackson.annotation.JsonClassDescription
-import org.junit.jupiter.api.Assertions.assertEquals
-import org.junit.jupiter.api.Assertions.assertFalse
-import org.junit.jupiter.api.Assertions.assertNotNull
-import org.junit.jupiter.api.Assertions.assertTrue
+import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.Test
 
 class JvmTypeTest {
@@ -36,7 +33,8 @@ class JvmTypeTest {
     fun `should default description`() {
         val type = JvmType(Dog::class.java)
         assertEquals(Dog::class.java.name, type.name)
-        assertEquals(Dog::class.java.name, type.description)
+        assertEquals(Dog::class.java.simpleName, type.description)
+        assertEquals(Dog::class.java.simpleName, type.ownLabel)
     }
 
     @Test
@@ -361,7 +359,7 @@ class JvmTypeTest {
         // Note: Spring's classpath scanner might not find all standard library classes
         // This is expected behavior as it's designed for application classes
         // Just verify the method doesn't throw exceptions
-        println("Found ${children.size} children of List: ${children.map { it.name }}")
+//        println("Found ${children.size} children of List: ${children.map { it.name }}")
     }
 
     @Test
@@ -390,5 +388,32 @@ class JvmTypeTest {
         val type = JvmType(String::class.java)
         assertEquals("String", type.ownLabel)
         assert(type.labels.contains("String"))
+    }
+
+    // Test classes for creationPermitted
+    class NoAnnotation
+
+    @CreationPermitted(true)
+    class CreationPermittedTrue
+
+    @CreationPermitted(false)
+    class CreationPermittedFalse
+
+    @Test
+    fun `creationPermitted should default to true when no annotation`() {
+        val type = JvmType(NoAnnotation::class.java)
+        assertTrue(type.creationPermitted, "Default should be true when no annotation")
+    }
+
+    @Test
+    fun `creationPermitted should return true when annotated with true`() {
+        val type = JvmType(CreationPermittedTrue::class.java)
+        assertTrue(type.creationPermitted, "Should return true when annotated with @CreationPermitted(true)")
+    }
+
+    @Test
+    fun `creationPermitted should return false when annotated with false`() {
+        val type = JvmType(CreationPermittedFalse::class.java)
+        assertFalse(type.creationPermitted, "Should return false when annotated with @CreationPermitted(false)")
     }
 }

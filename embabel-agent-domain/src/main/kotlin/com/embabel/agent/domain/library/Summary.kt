@@ -13,19 +13,14 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package com.embabel.agent.core
+package com.embabel.agent.domain.library
 
 /**
- * If this value is false, we cannot create new instances
- * of this type: For example, it's a reference.
+ * Summary of context for an operation, such as a document or a conversation.
  */
-@Target(AnnotationTarget.CLASS)
-@Retention(AnnotationRetention.RUNTIME)
-@MustBeDocumented
-annotation class CreationPermitted(
+data class Summary(
+    val summary: String,
+) : HasContent {
 
-    /**
-     * Whether creation of instances of this type is permitted.
-     */
-    val value: Boolean,
-)
+    override val content = summary
+}
