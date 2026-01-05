@@ -89,7 +89,8 @@ interface VectorSearch : TypeRetrievalOperations {
 /**
  * Full-text search using Lucene query syntax
  */
-interface TextSearch : SearchOperations {
+interface TextSearch : TypeRetrievalOperations {
+
     /**
      * Performs full-text search using Lucene query syntax.
      * Not all implementations will support all capabilities (such as fuzzy matching).
@@ -182,4 +183,4 @@ interface ResultExpander : SearchOperations {
 /**
  * Commonly implemented set of search functionality
  */
-interface CoreSearchOperations : FinderOperations, VectorSearch, TextSearch
+interface CoreSearchOperations : VectorSearch, TextSearch

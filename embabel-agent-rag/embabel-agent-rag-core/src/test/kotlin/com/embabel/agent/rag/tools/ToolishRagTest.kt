@@ -24,8 +24,7 @@ import com.embabel.common.core.types.TextSimilaritySearchRequest
 import io.mockk.every
 import io.mockk.mockk
 import io.mockk.verify
-import org.junit.jupiter.api.Assertions.assertEquals
-import org.junit.jupiter.api.Assertions.assertTrue
+import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.Nested
 import org.junit.jupiter.api.Test
 
@@ -176,8 +175,9 @@ class ToolishRagTest {
 
             val toolInstances = toolishRag.toolInstances()
 
-            assertEquals(1, toolInstances.size)
-            assertTrue(toolInstances[0] is TextSearchTools)
+            assertEquals(2, toolInstances.size)
+            assertTrue(toolInstances.any { it is TextSearchTools })
+            assertTrue(toolInstances.any { it is TypeRetrievalTools })
         }
 
         @Test
@@ -192,9 +192,9 @@ class ToolishRagTest {
 
             val toolInstances = toolishRag.toolInstances()
 
-            assertEquals(4, toolInstances.size)
+            assertEquals(3, toolInstances.size)
             assertTrue(toolInstances.any { it is TypeRetrievalTools })
-            assertTrue(toolInstances.any { it is FinderTools })
+            assertFalse(toolInstances.any { it is FinderTools })
             assertTrue(toolInstances.any { it is VectorSearchTools })
             assertTrue(toolInstances.any { it is TextSearchTools })
         }
@@ -566,7 +566,7 @@ class ToolishRagTest {
             )
 
             val toolInstances = toolishRag.toolInstances()
-            assertEquals(4, toolInstances.size)
+            assertEquals(3, toolInstances.size)
 
             // Get and use VectorSearchTools
             val vectorTools = toolInstances.filterIsInstance<VectorSearchTools>().first()
