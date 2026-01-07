@@ -1,5 +1,5 @@
 /*
- * Copyright 2024-2025 Embabel Software, Inc.
+ * Copyright 2024-2026 Embabel Pty Ltd.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -44,6 +44,26 @@ import org.springframework.context.annotation.Configuration
 @ConfigurationProperties(prefix = "embabel.agent.platform.models.openai")
 class OpenAiProperties : RetryProperties {
     /**
+     * Base URL for OpenAI API requests.
+     */
+    var baseUrl: String? = null
+
+    /**
+     * API key for authenticating with OpenAI services.
+     */
+    var apiKey: String? = null
+
+    /**
+     * Path to completions endpoint or configuration.
+     */
+    var completions: String? = null
+
+    /**
+     * Path to embeddings endpoint or configuration.
+     */
+    var embeddingsPath: String? = null
+
+    /**
      *  Maximum number of attempts.
      */
     override var maxAttempts: Int = 10
@@ -74,22 +94,23 @@ class OpenAiProperties : RetryProperties {
 @ExcludeFromJacocoGeneratedReport(reason = "OpenAi configuration can't be unit tested")
 class OpenAiModelsConfig(
     @Value("\${OPENAI_BASE_URL:#{null}}")
-    baseUrl: String?,
-    @Value("\${OPENAI_API_KEY}")
-    apiKey: String,
+    envBaseUrl: String?,
+    @Value("\${OPENAI_API_KEY:#{null}}")
+    envApiKey: String?,
     @Value("\${OPENAI_COMPLETIONS_PATH:#{null}}")
-    completionsPath: String?,
+    envCompletionsPath: String?,
     @Value("\${OPENAI_EMBEDDINGS_PATH:#{null}}")
-    embeddingsPath: String?,
+    envEmbeddingsPath: String?,
     observationRegistry: ObjectProvider<ObservationRegistry>,
     private val properties: OpenAiProperties,
     private val configurableBeanFactory: ConfigurableBeanFactory,
     private val modelLoader: LlmAutoConfigMetadataLoader<OpenAiModelDefinitions> = OpenAiModelLoader(),
 ) : OpenAiCompatibleModelFactory(
-    baseUrl = baseUrl,
-    apiKey = apiKey,
-    completionsPath = completionsPath,
-    embeddingsPath = embeddingsPath,
+    baseUrl = envBaseUrl ?: properties.baseUrl,
+    apiKey = envApiKey ?: properties.apiKey
+        ?: error("OpenAI API key required: set OPENAI_API_KEY env var or embabel.agent.platform.models.openai.api-key"),
+    completionsPath = envCompletionsPath ?: properties.completions,
+    embeddingsPath = envEmbeddingsPath ?: properties.embeddingsPath,
     observationRegistry = observationRegistry.getIfUnique { ObservationRegistry.NOOP }
 ) {
 

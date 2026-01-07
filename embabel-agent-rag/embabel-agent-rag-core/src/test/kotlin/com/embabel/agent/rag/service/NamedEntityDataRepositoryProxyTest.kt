@@ -1,5 +1,5 @@
 /*
- * Copyright 2024-2025 Embabel Software, Inc.
+ * Copyright 2024-2026 Embabel Pty Ltd.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -415,6 +415,199 @@ class NamedEntityDataRepositoryProxyTest {
             assertEquals(35, (result as Person).age)
             assertEquals(2, (result as Manager).directReports)
             assertEquals("E001", (result as Employee).employeeId)
+        }
+
+        @Test
+        fun `findEntityById tries native loading first`() {
+            // Create a native Person implementation
+            val nativePerson = object : Person {
+                override val id = "native-1"
+                override val name = "Native Alice"
+                override val description = "Loaded natively"
+                override val age = 99
+            }
+
+            // Repository that returns native implementation for Person
+            val dictRepository = object : InMemoryNamedEntityDataRepository(
+                dataDictionary = DataDictionary.fromClasses(Person::class.java, Manager::class.java)
+            ) {
+                override fun isNativeType(type: Class<*>): Boolean = type == Person::class.java
+
+                @Suppress("UNCHECKED_CAST")
+                override fun <T : NamedEntity> findNativeById(id: String, type: Class<T>): T? {
+                    return if (id == "native-1" && type == Person::class.java) {
+                        nativePerson as T
+                    } else {
+                        null
+                    }
+                }
+            }
+
+            // Save entity data (this would normally be found by findById)
+            dictRepository.save(SimpleNamedEntityData(
+                id = "native-1",
+                name = "Proxy Alice",
+                description = "Would be loaded as proxy",
+                labels = setOf("Person"),
+                properties = mapOf("age" to 30)
+            ))
+
+            val result = dictRepository.findEntityById("native-1")
+
+            assertNotNull(result)
+            assertTrue(result is Person)
+            // Should be the native implementation, not the proxy
+            assertEquals("Native Alice", result!!.name)
+            assertEquals(99, (result as Person).age)
+        }
+
+        @Test
+        fun `findEntityById falls back to proxy when native returns null`() {
+            // Repository where findNativeById always returns null
+            val dictRepository = object : InMemoryNamedEntityDataRepository(
+                dataDictionary = DataDictionary.fromClasses(Person::class.java)
+            ) {
+                override fun <T : NamedEntity> findNativeById(id: String, type: Class<T>): T? = null
+            }
+
+            dictRepository.save(SimpleNamedEntityData(
+                id = "proxy-1",
+                name = "Proxy Bob",
+                description = "Should be loaded as proxy",
+                labels = setOf("Person"),
+                properties = mapOf("age" to 42)
+            ))
+
+            val result = dictRepository.findEntityById("proxy-1")
+
+            assertNotNull(result)
+            assertTrue(result is Person)
+            assertEquals("Proxy Bob", result!!.name)
+            assertEquals(42, (result as Person).age)
+        }
+
+        @Test
+        fun `findEntityById tries native for each matching type when isNativeType returns true`() {
+            var personNativeCallCount = 0
+            var managerNativeCallCount = 0
+
+            val dictRepository = object : InMemoryNamedEntityDataRepository(
+                dataDictionary = DataDictionary.fromClasses(Person::class.java, Manager::class.java)
+            ) {
+                override fun isNativeType(type: Class<*>): Boolean = true
+
+                override fun <T : NamedEntity> findNativeById(id: String, type: Class<T>): T? {
+                    when (type) {
+                        Person::class.java -> personNativeCallCount++
+                        Manager::class.java -> managerNativeCallCount++
+                    }
+                    return null // Return null to force fallback
+                }
+            }
+
+            dictRepository.save(SimpleNamedEntityData(
+                id = "both-1",
+                name = "Both",
+                description = "Has both labels",
+                labels = setOf("Person", "Manager"),
+                properties = mapOf("age" to 30, "directReports" to 5, "department" to "IT")
+            ))
+
+            dictRepository.findEntityById("both-1")
+
+            // Should have tried native loading for both matching types
+            assertTrue(personNativeCallCount > 0 || managerNativeCallCount > 0,
+                "Should try native loading for at least one matching type")
+        }
+
+        @Test
+        fun `findEntityById skips native loading when isNativeType returns false`() {
+            var nativeCallCount = 0
+
+            val dictRepository = object : InMemoryNamedEntityDataRepository(
+                dataDictionary = DataDictionary.fromClasses(Person::class.java, Manager::class.java)
+            ) {
+                override fun isNativeType(type: Class<*>): Boolean = false
+
+                override fun <T : NamedEntity> findNativeById(id: String, type: Class<T>): T? {
+                    nativeCallCount++
+                    return null
+                }
+            }
+
+            dictRepository.save(SimpleNamedEntityData(
+                id = "skip-1",
+                name = "Skip",
+                description = "Should skip native",
+                labels = setOf("Person"),
+                properties = mapOf("age" to 25)
+            ))
+
+            val result = dictRepository.findEntityById("skip-1")
+
+            // Should NOT have called findNativeById
+            assertEquals(0, nativeCallCount, "Should not call findNativeById when isNativeType returns false")
+            // Should still return proxy
+            assertNotNull(result)
+            assertTrue(result is Person)
+        }
+
+        @Test
+        fun `findEntityById only calls native for types where isNativeType is true`() {
+            var personNativeCallCount = 0
+            var managerNativeCallCount = 0
+
+            val dictRepository = object : InMemoryNamedEntityDataRepository(
+                dataDictionary = DataDictionary.fromClasses(Person::class.java, Manager::class.java)
+            ) {
+                // Only Person is native, Manager is not
+                override fun isNativeType(type: Class<*>): Boolean =
+                    type == Person::class.java
+
+                override fun <T : NamedEntity> findNativeById(id: String, type: Class<T>): T? {
+                    when (type) {
+                        Person::class.java -> personNativeCallCount++
+                        Manager::class.java -> managerNativeCallCount++
+                    }
+                    return null
+                }
+            }
+
+            dictRepository.save(SimpleNamedEntityData(
+                id = "selective-1",
+                name = "Selective",
+                description = "Selective native",
+                labels = setOf("Person", "Manager"),
+                properties = mapOf("age" to 30, "directReports" to 5, "department" to "IT")
+            ))
+
+            dictRepository.findEntityById("selective-1")
+
+            // Should have called native for Person only
+            assertEquals(1, personNativeCallCount, "Should call findNativeById for Person")
+            assertEquals(0, managerNativeCallCount, "Should NOT call findNativeById for Manager")
+        }
+    }
+
+    @Nested
+    inner class IsNativeTypeTest {
+
+        @Test
+        fun `default isNativeType returns false`() {
+            assertFalse(repository.isNativeType(Person::class.java))
+            assertFalse(repository.isNativeType(Manager::class.java))
+            assertFalse(repository.isNativeType(String::class.java))
+        }
+
+        @Test
+        fun `isNativeType can be overridden to return true for specific types`() {
+            val customRepository = object : InMemoryNamedEntityDataRepository(testDictionary) {
+                override fun isNativeType(type: Class<*>): Boolean =
+                    type == Person::class.java
+            }
+
+            assertTrue(customRepository.isNativeType(Person::class.java))
+            assertFalse(customRepository.isNativeType(Manager::class.java))
         }
     }
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright 2024-2025 Embabel Software, Inc.
+ * Copyright 2024-2026 Embabel Pty Ltd.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -252,12 +252,17 @@ abstract class AbstractAgentProcess(
     protected fun handleStuck(agent: Agent) {
         val stuckHandler = agent.stuckHandler
         if (stuckHandler == null) {
-            logger.warn(
-                "Process {} is stuck: no handler. History ({}):\n\t{}",
-                this.id,
-                history.size,
-                history.joinToString("\n\t") { it.actionName },
-            )
+            if (processOptions.plannerType.needsGoals) {
+                logger.warn(
+                    "Process {} is stuck with no StuckHandler. This may or may not be an error. History ({}):\n\t{}",
+                    this.id,
+                    history.size,
+                    history.joinToString("\n\t") { it.actionName },
+                )
+            } else {
+                // This is not an error. It's a common state for chatbots, for example.
+                logger.debug("Process {} is paused, with no available actions", this.id)
+            }
             return
         }
         val result = stuckHandler.handleStuck(this)

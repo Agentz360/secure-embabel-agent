@@ -1,5 +1,5 @@
 /*
- * Copyright 2024-2026 Embabel Software, Inc.
+ * Copyright 2024-2026 Embabel Pty Ltd.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -20,6 +20,7 @@ import com.embabel.agent.core.DomainType
 import com.embabel.agent.core.JvmType
 import com.embabel.agent.rag.model.NamedEntity
 import com.embabel.agent.rag.model.NamedEntityData
+import com.embabel.agent.rag.model.Retrievable
 import com.embabel.common.core.types.SimilarityResult
 import com.embabel.common.core.types.TextSimilaritySearchRequest
 import com.fasterxml.jackson.databind.ObjectMapper
@@ -40,7 +41,7 @@ data class RelationshipData(
  * Supports typed hydration via [findTypedById] and [findByDomainType] when entities
  * have a [NamedEntityData.linkedDomainType] set.
  */
-interface NamedEntityDataRepository {
+interface NamedEntityDataRepository : CoreSearchOperations, FinderOperations {
 
     /**
      * ObjectMapper for hydrating entities to typed JVM instances.
@@ -114,7 +115,98 @@ interface NamedEntityDataRepository {
      * Notes on how much Lucene syntax is supported by this implementation
      * to help LLMs and users craft effective queries.
      */
-    val luceneSyntaxNotes: String
+    override val luceneSyntaxNotes: String
+
+    // === SearchOperations interface implementations ===
+
+    /**
+     * Check if this repository supports a given type name.
+     * Uses the [dataDictionary] to determine supported types.
+     *
+     * @param type the type name (typically the simple class name)
+     * @return true if the type is in the data dictionary
+     */
+    override fun supportsType(type: String): Boolean =
+        dataDictionary.jvmTypes.any { it.ownLabel == type }
+
+    /**
+     * Perform typed vector search, returning results hydrated to the specified type.
+     * Type must implement [NamedEntity] for hydration to succeed.
+     *
+     * @param request the search request
+     * @param clazz the target type for hydration
+     * @return list of similarity results with hydrated instances
+     */
+    @Suppress("UNCHECKED_CAST")
+    override fun <T : Retrievable> vectorSearch(
+        request: TextSimilaritySearchRequest,
+        clazz: Class<T>,
+    ): List<SimilarityResult<T>> {
+        if (!NamedEntity::class.java.isAssignableFrom(clazz)) {
+            return emptyList()
+        }
+        val namedEntityClass = clazz as Class<out NamedEntity>
+        return vectorSearch(request).mapNotNull { similarityResult ->
+            similarityResult.match.toTypedInstance(objectMapper, namedEntityClass)?.let { typed ->
+                SimilarityResult(typed as T, similarityResult.score)
+            }
+        }
+    }
+
+    /**
+     * Perform typed text search, returning results hydrated to the specified type.
+     * Type must implement [NamedEntity] for hydration to succeed.
+     *
+     * @param request the search request
+     * @param clazz the target type for hydration
+     * @return list of similarity results with hydrated instances
+     */
+    @Suppress("UNCHECKED_CAST")
+    override fun <T : Retrievable> textSearch(
+        request: TextSimilaritySearchRequest,
+        clazz: Class<T>,
+    ): List<SimilarityResult<T>> {
+        if (!NamedEntity::class.java.isAssignableFrom(clazz)) {
+            return emptyList()
+        }
+        val namedEntityClass = clazz as Class<out NamedEntity>
+        return textSearch(request).mapNotNull { similarityResult ->
+            similarityResult.match.toTypedInstance(objectMapper, namedEntityClass)?.let { typed ->
+                SimilarityResult(typed as T, similarityResult.score)
+            }
+        }
+    }
+
+    /**
+     * Find an entity by ID and hydrate to the specified type.
+     * Type must implement [NamedEntity] for lookup to succeed.
+     *
+     * @param id the entity ID
+     * @param clazz the target type
+     * @return the hydrated instance, or null if not found
+     */
+    @Suppress("UNCHECKED_CAST")
+    override fun <T> findById(id: String, clazz: Class<T>): T? {
+        if (!NamedEntity::class.java.isAssignableFrom(clazz)) {
+            return null
+        }
+        return findTypedById(id, clazz as Class<out NamedEntity>) as T?
+    }
+
+    /**
+     * Find an entity by ID and type name.
+     * Uses the [dataDictionary] to resolve the type name to a class.
+     *
+     * @param id the entity ID
+     * @param type the type name (typically the simple class name)
+     * @return the hydrated instance, or null if not found or type not supported
+     */
+    @Suppress("UNCHECKED_CAST")
+    override fun <T : Retrievable> findById(id: String, type: String): T? {
+        val jvmType = dataDictionary.jvmTypes.find { it.ownLabel == type }
+            ?: return null
+        return findById(id, jvmType.clazz) as T?
+    }
 
     /**
      * Save multiple entities.
@@ -178,6 +270,24 @@ interface NamedEntityDataRepository {
      * @return list of entities if type has native mapping, null to fall back to generic lookup
      */
     fun <T : NamedEntity> findNativeAll(type: Class<T>): List<T>? = null
+
+    /**
+     * Check if a type can be loaded natively by this repository.
+     *
+     * Override this method to indicate which types have native mappings.
+     * This is used by [findEntityById] to avoid calling [findNativeById] for types
+     * that would throw exceptions or fail.
+     *
+     * For example, a Drivine-based implementation might check for @NodeFragment annotation:
+     * ```kotlin
+     * override fun isNativeType(type: Class<*>): Boolean =
+     *     type.isAnnotationPresent(NodeFragment::class.java)
+     * ```
+     *
+     * @param type the class to check
+     * @return true if this repository can natively load instances of this type
+     */
+    fun isNativeType(type: Class<*>): Boolean = false
 
     // === Typed hydration methods ===
 
@@ -330,8 +440,25 @@ interface NamedEntityDataRepository {
             return null
         }
 
-        // Extract the classes and create the proxy
-        val interfaces = matchingTypes.map { it.clazz as Class<out NamedEntity> }.toTypedArray()
+        // Try native store first for each matching type that supports native loading
+        for (jvmType in matchingTypes) {
+            val clazz = jvmType.clazz as Class<out NamedEntity>
+            if (isNativeType(clazz)) {
+                findNativeById(id, clazz)?.let { return it }
+            }
+        }
+
+        // Fall back to creating a proxy implementing all matching interfaces
+        // Filter to only interfaces - Java proxies cannot implement classes
+        val interfaces = matchingTypes
+            .filter { it.clazz.isInterface }
+            .map { it.clazz as Class<out NamedEntity> }
+            .toTypedArray()
+
+        if (interfaces.isEmpty()) {
+            return null
+        }
+
         return entity.toInstance(*interfaces)
     }
 }

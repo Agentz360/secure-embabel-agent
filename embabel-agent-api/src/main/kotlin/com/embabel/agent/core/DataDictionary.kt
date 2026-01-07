@@ -1,5 +1,5 @@
 /*
- * Copyright 2024-2025 Embabel Software, Inc.
+ * Copyright 2024-2026 Embabel Pty Ltd.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -21,6 +21,7 @@ package com.embabel.agent.core
  * @param to The target domain type
  * @param name The name of the relationship (inferred from property name)
  * @param cardinality The cardinality of the relationship
+ * @param metadata Semantic metadata from [@Semantics] annotation, including natural language predicates
  */
 data class AllowedRelationship(
     val from: DomainType,
@@ -28,6 +29,7 @@ data class AllowedRelationship(
     val name: String,
     val description: String = name,
     val cardinality: Cardinality,
+    val metadata: Map<String, String> = emptyMap(),
 )
 
 /**
@@ -65,6 +67,7 @@ interface DataDictionary {
                             to = property.type,
                             name = property.name,
                             cardinality = property.cardinality,
+                            metadata = property.metadata,
                         )
                     )
                 }

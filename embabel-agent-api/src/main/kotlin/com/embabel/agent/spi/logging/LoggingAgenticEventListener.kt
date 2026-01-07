@@ -1,5 +1,5 @@
 /*
- * Copyright 2024-2025 Embabel Software, Inc.
+ * Copyright 2024-2026 Embabel Pty Ltd.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -203,12 +203,21 @@ open class LoggingAgenticEventListener(
     protected open fun getAgentProcessWaitingEventMessage(e: AgentProcessWaitingEvent): String =
         "[${e.processId}] waiting"
 
-    protected open fun getAgentProcessStuckEventMessage(e: AgentProcessStuckEvent): String =
-        """|[${e.processId}] stuck at:
-           |${e.agentProcess.lastWorldState?.infoString(true, 1)}
+    protected open fun getAgentProcessStuckEventMessage(e: AgentProcessStuckEvent): String {
+        if (e.agentProcess.processOptions.plannerType.needsGoals) {
+            return """|[${e.processId}] stuck at:
+           |${
+                e.agentProcess.lastWorldState?.infoString(
+                    verbose = e.agentProcess.processOptions.verbosity.showLongPlans,
+                    indent = 1,
+                )
+            }
            |"""
-            .trimMargin()
-            .indentLines(level = 1, skipIndentFirstLine = true)
+                .trimMargin()
+                .indentLines(level = 1, skipIndentFirstLine = true)
+        }
+        return "[${e.processId}] has no available actions to progress: This is not an error"
+    }
 
     protected open fun getObjectAddedEventMessage(e: ObjectAddedEvent): String =
         "[${e.processId}] object added: ${if (e.agentProcess.processContext.processOptions.verbosity.debug) e.value else e.value::class.java.simpleName}"
