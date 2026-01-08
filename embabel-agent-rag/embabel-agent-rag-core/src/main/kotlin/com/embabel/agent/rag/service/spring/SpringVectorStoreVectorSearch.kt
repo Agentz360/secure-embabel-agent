@@ -15,9 +15,11 @@
  */
 package com.embabel.agent.rag.service.spring
 
+import com.embabel.agent.rag.filter.InMemoryPropertyFilter
+import com.embabel.agent.rag.filter.PropertyFilter
 import com.embabel.agent.rag.model.Chunk
 import com.embabel.agent.rag.model.Retrievable
-import com.embabel.agent.rag.service.VectorSearch
+import com.embabel.agent.rag.service.FilteringVectorSearch
 import com.embabel.common.core.types.SimilarityResult
 import com.embabel.common.core.types.TextSimilaritySearchRequest
 import com.embabel.common.core.types.ZeroToOne
@@ -25,13 +27,15 @@ import com.embabel.common.util.trim
 import org.springframework.ai.document.Document
 import org.springframework.ai.vectorstore.SearchRequest
 import org.springframework.ai.vectorstore.VectorStore
+import org.springframework.ai.vectorstore.filter.Filter
 
 /**
  * Embabel VectorSearch wrapping a Spring AI VectorStore.
+ * Implements [FilteringVectorSearch] for native metadata filtering support.
  */
 class SpringVectorStoreVectorSearch(
     private val vectorStore: VectorStore,
-) : VectorSearch {
+) : FilteringVectorSearch {
 
     override fun supportsType(type: String): Boolean =
         type.equals("Chunk", ignoreCase = true)
@@ -39,14 +43,38 @@ class SpringVectorStoreVectorSearch(
     override fun <T : Retrievable> vectorSearch(
         request: TextSimilaritySearchRequest,
         clazz: Class<T>,
+    ): List<SimilarityResult<T>> = executeSearch(request, filterExpression = null)
+
+    override fun <T : Retrievable> vectorSearchWithFilter(
+        request: TextSimilaritySearchRequest,
+        clazz: Class<T>,
+        metadataFilter: PropertyFilter?,
+        propertyFilter: PropertyFilter?,
     ): List<SimilarityResult<T>> {
-        val searchRequest = SearchRequest
+        // Apply metadata filter natively via Spring AI
+        val results = executeSearch<T>(request, metadataFilter?.toSpringAiExpression())
+        // Apply property filter in-memory if specified
+        return if (propertyFilter != null) {
+            InMemoryPropertyFilter.filterByProperties(results, propertyFilter)
+        } else {
+            results
+        }
+    }
+
+    @Suppress("UNCHECKED_CAST")
+    private fun <T : Retrievable> executeSearch(
+        request: TextSimilaritySearchRequest,
+        filterExpression: Filter.Expression?,
+    ): List<SimilarityResult<T>> {
+        val searchRequestBuilder = SearchRequest
             .builder()
             .query(request.query)
             .similarityThreshold(request.similarityThreshold)
             .topK(request.topK)
-            .build()
-        val results: List<Document> = vectorStore.similaritySearch(searchRequest)!!
+
+        filterExpression?.let { searchRequestBuilder.filterExpression(it) }
+
+        val results: List<Document> = vectorStore.similaritySearch(searchRequestBuilder.build())!!
         return results.map {
             DocumentSimilarityResult(
                 document = it,
@@ -54,6 +82,72 @@ class SpringVectorStoreVectorSearch(
             )
         } as List<SimilarityResult<T>>
     }
+}
+
+/**
+ * Translate [PropertyFilter] to Spring AI [Filter.Expression].
+ */
+fun PropertyFilter.toSpringAiExpression(): Filter.Expression = when (this) {
+    is PropertyFilter.Eq -> Filter.Expression(
+        Filter.ExpressionType.EQ,
+        Filter.Key(key),
+        Filter.Value(value)
+    )
+    is PropertyFilter.Ne -> Filter.Expression(
+        Filter.ExpressionType.NE,
+        Filter.Key(key),
+        Filter.Value(value)
+    )
+    is PropertyFilter.Gt -> Filter.Expression(
+        Filter.ExpressionType.GT,
+        Filter.Key(key),
+        Filter.Value(value)
+    )
+    is PropertyFilter.Gte -> Filter.Expression(
+        Filter.ExpressionType.GTE,
+        Filter.Key(key),
+        Filter.Value(value)
+    )
+    is PropertyFilter.Lt -> Filter.Expression(
+        Filter.ExpressionType.LT,
+        Filter.Key(key),
+        Filter.Value(value)
+    )
+    is PropertyFilter.Lte -> Filter.Expression(
+        Filter.ExpressionType.LTE,
+        Filter.Key(key),
+        Filter.Value(value)
+    )
+    is PropertyFilter.In -> Filter.Expression(
+        Filter.ExpressionType.IN,
+        Filter.Key(key),
+        Filter.Value(values)
+    )
+    is PropertyFilter.Nin -> Filter.Expression(
+        Filter.ExpressionType.NIN,
+        Filter.Key(key),
+        Filter.Value(values)
+    )
+    is PropertyFilter.Contains -> Filter.Expression(
+        Filter.ExpressionType.EQ,  // Spring AI doesn't have CONTAINS, fallback to EQ
+        Filter.Key(key),
+        Filter.Value(value)
+    )
+    is PropertyFilter.And -> filters
+        .map { it.toSpringAiExpression() }
+        .reduce { left, right ->
+            Filter.Expression(Filter.ExpressionType.AND, left, right)
+        }
+    is PropertyFilter.Or -> filters
+        .map { it.toSpringAiExpression() }
+        .reduce { left, right ->
+            Filter.Expression(Filter.ExpressionType.OR, left, right)
+        }
+    is PropertyFilter.Not -> Filter.Expression(
+        Filter.ExpressionType.NOT,
+        filter.toSpringAiExpression(),
+        null
+    )
 }
 
 internal class DocumentSimilarityResult(
