@@ -47,7 +47,14 @@ data class LlmInvocation(
     val interaction: LlmInteraction,
     val messages: List<Message>,
     val method: Method,
-)
+) {
+    /**
+     * The prompt text (content of all messages concatenated).
+     * Convenience property for testing assertions.
+     */
+    val prompt: String
+        get() = messages.joinToString("\n") { it.content }
+}
 
 data class FakePromptRunner(
     override val llm: LlmOptions?,
@@ -59,6 +66,7 @@ data class FakePromptRunner(
     private val contextualPromptContributors: List<ContextualPromptElement>,
     override val generateExamples: Boolean?,
     override val propertyFilter: Predicate<String> = Predicate { true },
+    override val validation: Boolean = true,
     private val context: OperationContext,
     private val _llmInvocations: MutableList<LlmInvocation> = mutableListOf(),
     private val responses: MutableList<Any?> = mutableListOf(),
@@ -190,6 +198,9 @@ data class FakePromptRunner(
 
     override fun withPropertyFilter(filter: Predicate<String>): PromptRunner =
         copy(propertyFilter = this.propertyFilter.and(filter))
+
+    override fun withValidation(validation: Boolean): PromptRunner =
+        copy(validation = validation)
 
 
     private fun createLlmInteraction() =

@@ -293,9 +293,10 @@ interface NamedEntityDataRepository : CoreSearchOperations, FinderOperations, Fi
     }
 
     /**
-     * Create a relationship between two entities.
+     * Create a relationship between two retrievables (entities, chunks, etc.).
+     * For example, linking a Chunk to the NamedEntity it mentions.
      */
-    fun createRelationship(a: EntityIdentifier, b: EntityIdentifier, relationship: RelationshipData)
+    fun createRelationship(a: RetrievableIdentifier, b: RetrievableIdentifier, relationship: RelationshipData)
 
     /**
      * Delete an entity by ID.
@@ -374,8 +375,10 @@ interface NamedEntityDataRepository : CoreSearchOperations, FinderOperations, Fi
      * @return the hydrated instance, or null if not found or hydration fails
      */
     fun <T : NamedEntity> findTypedById(id: String, type: Class<T>): T? {
-        // Try native store first
-        findNativeById(id, type)?.let { return it }
+        // Try native store first, but only if this type is natively mapped
+        if (isNativeType(type)) {
+            findNativeById(id, type)?.let { return it }
+        }
 
         // Fall back to generic lookup
         val jvmType = JvmType(type)
@@ -436,7 +439,7 @@ interface NamedEntityDataRepository : CoreSearchOperations, FinderOperations, Fi
      *
      * Example:
      * ```java
-     * // Entity has labels ["Person", "Manager", "Entity"]
+     * // Entity has labels ["Person", "Manager", "__Entity__"]
      * NamedEntity result = repository.findById(
      *     "emp-1",
      *     Person.class, Manager.class, Employee.class
@@ -481,7 +484,7 @@ interface NamedEntityDataRepository : CoreSearchOperations, FinderOperations, Fi
      * val dictionary = DataDictionary.fromClasses(Person::class.java, Manager::class.java)
      * repository.dataDictionary = dictionary
      *
-     * // Entity has labels ["Person", "Manager", "Entity"]
+     * // Entity has labels ["Person", "Manager", "__Entity__"]
      * val result = repository.findEntityById("emp-1")
      * // result implements both Person and Manager
      * val person = result as Person

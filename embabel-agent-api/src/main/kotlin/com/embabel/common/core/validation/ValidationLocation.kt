@@ -13,23 +13,11 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package com.embabel.agent.rag.service
+package com.embabel.common.core.validation
 
-/**
- * Identifier for an entity lookup.
- * Ensures that ids don't need to be globally unique by namespacing them with a type.
- *
- * @param id The unique identifier of the entity within its type.
- * @param type The type or namespace of the entity. This may be only one of multiple labels.
- */
-data class EntityIdentifier(
-    val id: String,
+data class ValidationLocation(
     val type: String,
-) {
-
-    companion object {
-
-        fun forUser(id: String) =
-            EntityIdentifier(id = id, type = "User")
-    }
-}
+    val name: String,
+    val agentName: String,
+    val component: String,
+)

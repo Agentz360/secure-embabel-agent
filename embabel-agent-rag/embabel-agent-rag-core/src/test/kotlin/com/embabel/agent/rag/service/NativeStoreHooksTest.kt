@@ -17,6 +17,7 @@ package com.embabel.agent.rag.service
 
 import com.embabel.agent.core.DataDictionary
 import com.embabel.agent.rag.model.NamedEntity
+import com.embabel.agent.rag.model.RetrievableEntity
 import com.embabel.agent.rag.model.SimpleNamedEntityData
 import com.embabel.agent.rag.service.support.InMemoryNamedEntityDataRepository
 import org.junit.jupiter.api.Assertions.*
@@ -51,7 +52,7 @@ data class ProductImpl(
     override val uri: String? = null,
     override val metadata: Map<String, Any?> = emptyMap(),
 ) : Product {
-    override fun labels(): Set<String> = setOf("Product", "Entity")
+    override fun labels(): Set<String> = setOf("Product", RetrievableEntity.ENTITY_LABEL)
 }
 
 /**
@@ -153,6 +154,8 @@ class NativeStoreHooksTest {
             )
 
             val repository = object : InMemoryNamedEntityDataRepository(testDictionary) {
+                override fun isNativeType(type: Class<*>): Boolean = type == Product::class.java
+
                 @Suppress("UNCHECKED_CAST")
                 override fun <T : NamedEntity> findNativeById(id: String, type: Class<T>): T? {
                     return if (id == "native-1" && type == Product::class.java) {
@@ -346,6 +349,8 @@ class NativeStoreHooksTest {
             val nativeProduct = ProductImpl("prod-1", "Native Product", "Native", 50.0, "NAT")
 
             val repository = object : InMemoryNamedEntityDataRepository(testDictionary) {
+                override fun isNativeType(type: Class<*>): Boolean = type == Product::class.java
+
                 @Suppress("UNCHECKED_CAST")
                 override fun <T : NamedEntity> findNativeById(id: String, type: Class<T>): T? {
                     return if (type == Product::class.java && id == "prod-1") {
