@@ -17,8 +17,10 @@ package com.embabel.agent.rag.model
 
 import com.embabel.agent.core.DomainType
 import com.embabel.agent.core.JvmType
+import com.embabel.agent.rag.model.NamedEntityData.Companion.ENTITY_LABEL
 import com.embabel.common.util.indent
 import com.fasterxml.jackson.databind.ObjectMapper
+import io.swagger.v3.oas.annotations.media.Schema
 import org.slf4j.LoggerFactory
 import java.lang.reflect.Proxy
 
@@ -32,7 +34,17 @@ import java.lang.reflect.Proxy
  * - [JvmType]: hydration to a typed JVM instance
  * - [DynamicType][com.embabel.agent.core.DynamicType]: schema/structure metadata
  */
-interface NamedEntityData : EntityData, NamedEntity {
+interface NamedEntityData : NamedEntity {
+
+    /**
+     * Properties of this entity. Arbitrary key-value pairs.
+     */
+    @get:Schema(
+        description = "Properties of this object. Arbitrary key-value pairs, although likely specified in schema. Must filter out embedding",
+        example = "{\"birthYear\": 1854, \"deathYear\": 1930}",
+        required = true,
+    )
+    val properties: Map<String, Any>
 
     /**
      * Optional linkage to a [DomainType] ([JvmType] or [DynamicType][com.embabel.agent.core.DynamicType]).
@@ -50,11 +62,36 @@ interface NamedEntityData : EntityData, NamedEntity {
         return "(${labelsString} id='$id', name=$name, description=$description)".indent(indent)
     }
 
-    // Use EntityData's embeddableValue which includes properties
-    override fun embeddableValue(): String = super<EntityData>.embeddableValue()
+    override fun embeddableValue(): String {
+        val props = properties.entries
+            .filterNot { DEFAULT_EXCLUDED_PROPERTIES.contains(it.key) }
+            .joinToString { (k, v) -> "$k=$v" }
+        return "Entity {${labels()}}: properties=[$props]"
+    }
 
-    // Use RetrievableEntity's labels which adds ENTITY_LABEL (__Entity__)
-    override fun labels(): Set<String> = super<EntityData>.labels()
+    // Don't call super.labels() - NamedEntityData is a data container, not a domain class.
+    // The class name should come from stored labels, not from this::class.simpleName.
+    override fun labels(): Set<String> = setOf(ENTITY_LABEL)
+
+    companion object {
+        val DEFAULT_EXCLUDED_PROPERTIES = setOf("embedding", "id")
+
+        /**
+         * Base label for all entities.
+         * Aligns with Neo4j LLM Graph Builder convention.
+         * @see <a href="https://github.com/neo4j-labs/llm-graph-builder">LLM Graph Builder</a>
+         */
+        const val ENTITY_LABEL = "__Entity__"
+
+        /**
+         * Relationship type from Chunk to Entity.
+         * Aligns with Neo4j LLM Graph Builder convention.
+         * ```
+         * (Chunk)-[:HAS_ENTITY]->(__Entity__)
+         * ```
+         */
+        const val HAS_ENTITY = "HAS_ENTITY"
+    }
 
     /**
      * Hydrate this entity to a typed JVM instance using [linkedDomainType].
@@ -85,11 +122,30 @@ interface NamedEntityData : EntityData, NamedEntity {
      * @return the hydrated instance, or null if hydration fails
      */
     @Suppress("UNCHECKED_CAST")
-    fun <T : NamedEntity> toTypedInstance(objectMapper: ObjectMapper, type: Class<T>): T? {
+    fun <T : NamedEntity> toTypedInstance(objectMapper: ObjectMapper, type: Class<T>): T? =
+        toTypedInstance(objectMapper, type, null)
+
+    /**
+     * Hydrate this entity to a typed JVM instance with relationship navigation support.
+     *
+     * When a [RelationshipNavigator] is provided, methods annotated with [@Relationship]
+     * will lazily load related entities via the navigator.
+     *
+     * @param objectMapper the ObjectMapper to use for deserialization (only for concrete classes)
+     * @param type the target class to hydrate to
+     * @param navigator optional navigator for relationship traversal
+     * @return the hydrated instance, or null if hydration fails
+     */
+    @Suppress("UNCHECKED_CAST")
+    fun <T : NamedEntity> toTypedInstance(
+        objectMapper: ObjectMapper,
+        type: Class<T>,
+        navigator: RelationshipNavigator?,
+    ): T? {
         return try {
             if (type.isInterface) {
-                // Use dynamic proxy for interfaces
-                toInstance(type) as T
+                // Use dynamic proxy for interfaces with navigator support
+                toInstance(navigator, type) as T
             } else {
                 // Use Jackson for concrete classes
                 val allProperties = buildMap {
@@ -127,7 +183,31 @@ interface NamedEntityData : EntityData, NamedEntity {
      * @return an instance implementing all specified interfaces
      */
     @Suppress("UNCHECKED_CAST")
-    fun <T : NamedEntity> toInstance(vararg interfaces: Class<out NamedEntity>): T {
+    fun <T : NamedEntity> toInstance(vararg interfaces: Class<out NamedEntity>): T =
+        toInstance(navigator = null, interfaces = interfaces)
+
+    /**
+     * Create an instance implementing the specified interfaces with relationship navigation support.
+     *
+     * When a [RelationshipNavigator] is provided, methods annotated with
+     * `@Semantics(relationship = "...")` will lazily load related entities.
+     *
+     * Example:
+     * ```kotlin
+     * // With relationship navigation
+     * val person = entityData.toInstance<Person>(repository, Person::class.java)
+     * val employer = person.getEmployer() // Lazy loads via repository
+     * ```
+     *
+     * @param navigator optional navigator for relationship traversal (typically the repository)
+     * @param interfaces the interfaces the instance should implement
+     * @return an instance implementing all specified interfaces
+     */
+    @Suppress("UNCHECKED_CAST")
+    fun <T : NamedEntity> toInstance(
+        navigator: RelationshipNavigator?,
+        vararg interfaces: Class<out NamedEntity>,
+    ): T {
         require(interfaces.isNotEmpty()) { "At least one interface must be specified" }
 
         val allProperties = buildMap {
@@ -142,7 +222,9 @@ interface NamedEntityData : EntityData, NamedEntity {
             properties = allProperties,
             metadata = metadata,
             labels = labels(),
-            entityData = this
+            entityData = this,
+            navigator = navigator,
+            interfaces = interfaces,
         )
 
         return Proxy.newProxyInstance(
