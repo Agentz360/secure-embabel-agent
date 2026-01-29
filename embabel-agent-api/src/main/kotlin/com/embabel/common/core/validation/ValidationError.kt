@@ -15,9 +15,9 @@
  */
 package com.embabel.common.core.validation
 
-data class ValidationError(
+data class ValidationError  @JvmOverloads constructor(
     val code: String,
     val message: String,
     val severity: ValidationSeverity,
-    val location: ValidationLocation,
+    val location: ValidationLocation? = null,
 )

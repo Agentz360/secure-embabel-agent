@@ -16,7 +16,11 @@
 package com.embabel.agent.api.common.thinking
 
 import com.embabel.agent.api.common.PlatformServices
+import com.embabel.agent.api.common.PromptRunner
 import com.embabel.agent.api.common.support.OperationContextPromptRunner
+import com.embabel.agent.core.ToolGroup
+import com.embabel.agent.core.ToolGroupRequirement
+import com.embabel.agent.api.validation.guardrails.GuardRail
 import com.embabel.agent.spi.support.springai.ChatClientLlmOperations
 import com.embabel.chat.AssistantMessage
 import com.embabel.common.core.thinking.ThinkingBlock
@@ -29,6 +33,7 @@ import io.mockk.verify
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
+import com.embabel.agent.core.support.LlmInteraction
 
 /**
  * Test for the thinking prompt runner operations.
@@ -101,7 +106,7 @@ class ThinkingPromptRunnerOperationsTest {
         every {
             mockChatClientOps.doTransformWithThinking<ProcessedData>(
                 any<List<com.embabel.chat.Message>>(),
-                any<com.embabel.agent.spi.LlmInteraction>(),
+                any<LlmInteraction>(),
                 any<Class<ProcessedData>>(),
                 isNull()
             )
@@ -133,7 +138,7 @@ class ThinkingPromptRunnerOperationsTest {
         // Then: Verify complete pipeline worked
         assertNotNull(result.result)
         assertEquals("processed data", result.result!!.result)
-        assertEquals("success", result.result!!.status)
+        assertEquals("success", result.result.status)
 
         // Verify thinking blocks were extracted correctly
         assertEquals(2, result.thinkingBlocks.size)
@@ -164,7 +169,7 @@ class ThinkingPromptRunnerOperationsTest {
             override val llm: com.embabel.common.ai.model.LlmOptions? = null
             override val messages: List<com.embabel.chat.Message> = emptyList()
             override val images: List<com.embabel.agent.api.common.AgentImage> = emptyList()
-            override val toolGroups: Set<com.embabel.agent.core.ToolGroupRequirement> = emptySet()
+            override val toolGroups: Set<ToolGroupRequirement> = emptySet()
             override val toolObjects: List<com.embabel.agent.api.common.ToolObject> = emptyList()
             override val promptContributors: List<com.embabel.common.ai.prompt.PromptContributor> = emptyList()
             override val generateExamples: Boolean? = null
@@ -195,7 +200,7 @@ class ThinkingPromptRunnerOperationsTest {
                 return true
             }
 
-            override fun stream(): com.embabel.agent.api.common.streaming.StreamingPromptRunnerOperations {
+            override fun streaming(): com.embabel.agent.api.common.streaming.StreamingPromptRunner.Streaming {
                 throw UnsupportedOperationException("Not implemented for test")
             }
 
@@ -212,10 +217,10 @@ class ThinkingPromptRunnerOperationsTest {
             override fun withLlm(llm: com.embabel.common.ai.model.LlmOptions): com.embabel.agent.api.common.PromptRunner =
                 this
 
-            override fun withToolGroup(toolGroup: com.embabel.agent.core.ToolGroupRequirement): com.embabel.agent.api.common.PromptRunner =
+            override fun withToolGroup(toolGroup: ToolGroupRequirement): com.embabel.agent.api.common.PromptRunner =
                 this
 
-            override fun withToolGroup(toolGroup: com.embabel.agent.core.ToolGroup): com.embabel.agent.api.common.PromptRunner =
+            override fun withToolGroup(toolGroup: ToolGroup): com.embabel.agent.api.common.PromptRunner =
                 this
 
             override fun withToolObject(toolObject: com.embabel.agent.api.common.ToolObject): com.embabel.agent.api.common.PromptRunner =
@@ -243,13 +248,18 @@ class ThinkingPromptRunnerOperationsTest {
             override fun withValidation(validation: Boolean): com.embabel.agent.api.common.PromptRunner =
                 this
 
-            override fun <T> creating(outputClass: Class<T>): com.embabel.agent.api.common.nested.ObjectCreator<T> {
+            override fun <T> creating(outputClass: Class<T>): com.embabel.agent.api.common.PromptRunner.Creating<T> {
                 throw UnsupportedOperationException("Not implemented for test")
             }
 
-            override fun withTemplate(templateName: String): com.embabel.agent.api.common.nested.TemplateOperations {
+            override fun rendering(templateName: String): com.embabel.agent.api.common.PromptRunner.Rendering {
                 throw UnsupportedOperationException("Not implemented for test")
             }
+
+            // Guardrail methods - no-op implementations for test purposes
+            // These are required because StreamingPromptRunner extends PromptRunner which has guardrail methods
+            // For test isolation, we don't need actual guardrail functionality
+            override fun withGuardRails(vararg guards: GuardRail): PromptRunner = this
         }
 
         // When/Then: Call withThinking() on StreamingPromptRunner should throw exception
@@ -288,7 +298,7 @@ class ThinkingPromptRunnerOperationsTest {
     fun `method should delegate to OperationContextPromptRunner withThinking`() {
         // Given: OperationContextPromptRunner with mocked withThinking method
         val mockOperationRunner = mockk<OperationContextPromptRunner>()
-        val mockThinkingOps = mockk<ThinkingPromptRunnerOperations>()
+        val mockThinkingOps = mockk<PromptRunner.Thinking>()
 
         every { mockOperationRunner.withThinking() } returns mockThinkingOps
 

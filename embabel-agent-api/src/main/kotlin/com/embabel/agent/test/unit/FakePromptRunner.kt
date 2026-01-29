@@ -16,25 +16,29 @@
 package com.embabel.agent.test.unit
 
 import com.embabel.agent.api.common.*
+import com.embabel.agent.api.validation.guardrails.GuardRail
 import com.embabel.agent.api.common.nested.ObjectCreator
 import com.embabel.agent.api.common.nested.TemplateOperations
-import com.embabel.agent.api.common.nested.support.PromptRunnerObjectCreator
+import com.embabel.agent.api.common.support.DelegatingCreating
+import com.embabel.agent.api.common.support.DelegatingRendering
+import com.embabel.agent.api.common.support.PromptExecutionDelegate
 import com.embabel.agent.api.tool.Tool
 import com.embabel.agent.core.ToolGroup
 import com.embabel.agent.core.ToolGroupRequirement
-import com.embabel.agent.core.support.safelyGetToolCallbacks
-import com.embabel.agent.spi.LlmInteraction
-import com.embabel.agent.spi.support.springai.toSpringToolCallback
+import com.embabel.agent.core.support.LlmInteraction
+import com.embabel.agent.core.support.safelyGetTools
+import com.embabel.agent.spi.LlmOperations
+import com.embabel.chat.AssistantMessage
 import com.embabel.chat.Message
 import com.embabel.chat.UserMessage
 import com.embabel.common.ai.model.LlmOptions
 import com.embabel.common.ai.prompt.PromptContributor
 import com.embabel.common.core.MobyNameGenerator
+import com.embabel.common.core.streaming.StreamingEvent
+import com.embabel.common.core.thinking.ThinkingResponse
 import com.embabel.common.core.types.ZeroToOne
-import com.embabel.common.textio.template.JinjavaTemplateRenderer
-import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import org.slf4j.LoggerFactory
-import org.springframework.ai.tool.ToolCallback
+import reactor.core.publisher.Flux
 import java.util.function.Predicate
 
 enum class Method {
@@ -51,9 +55,16 @@ data class LlmInvocation(
     /**
      * The prompt text (content of all messages concatenated).
      * Convenience property for testing assertions.
+     *
+     * Note: Use this property (or getPrompt() in Java) to get the full prompt content.
+     * The default toString() of Message objects truncates content for readability.
      */
     val prompt: String
-        get() = messages.joinToString("\n") { it.content }
+        get() = messages.joinToString("\n") { it.textContent }
+
+    override fun toString(): String {
+        return "LlmInvocation(id=${interaction.id}, method=$method, messageCount=${messages.size})"
+    }
 }
 
 data class FakePromptRunner(
@@ -70,18 +81,183 @@ data class FakePromptRunner(
     private val context: OperationContext,
     private val _llmInvocations: MutableList<LlmInvocation> = mutableListOf(),
     private val responses: MutableList<Any?> = mutableListOf(),
-    private val otherToolCallbacks: List<ToolCallback> = emptyList(),
+    private val otherTools: List<Tool> = emptyList(),
     /**
      * The interaction ID set via withInteractionId() or withId().
      * Can be inspected in tests to verify the correct ID was set.
      */
     val interactionId: InteractionId? = null,
+    private val guardRails: List<GuardRail> = emptyList(),
 ) : PromptRunner {
 
     private val logger = LoggerFactory.getLogger(FakePromptRunner::class.java)
 
     init {
         logger.info("Fake prompt runner created: ${hashCode()}")
+    }
+
+    /**
+     * Internal adapter that implements PromptExecutionDelegate for use with delegating implementations.
+     */
+    private inner class DelegateAdapter : PromptExecutionDelegate {
+        override val llmOperations: LlmOperations
+            get() = context.agentPlatform().platformServices.llmOperations
+
+        override val templateRenderer: com.embabel.common.textio.template.TemplateRenderer
+            get() = context.agentPlatform().platformServices.templateRenderer
+
+        override val objectMapper: com.fasterxml.jackson.databind.ObjectMapper
+            get() = context.agentPlatform().platformServices.objectMapper
+
+        override val llm: LlmOptions?
+            get() = this@FakePromptRunner.llm
+
+        override val messages: List<Message>
+            get() = this@FakePromptRunner.messages
+
+        override val images: List<AgentImage>
+            get() = this@FakePromptRunner.images
+
+        override val toolGroups: Set<ToolGroupRequirement>
+            get() = this@FakePromptRunner.toolGroups
+
+        override val toolObjects: List<ToolObject>
+            get() = this@FakePromptRunner.toolObjects
+
+        override val promptContributors: List<PromptContributor>
+            get() = this@FakePromptRunner.promptContributors
+
+        override val generateExamples: Boolean?
+            get() = this@FakePromptRunner.generateExamples
+
+        override val propertyFilter: Predicate<String>
+            get() = this@FakePromptRunner.propertyFilter
+
+        override val validation: Boolean
+            get() = this@FakePromptRunner.validation
+
+        override fun withInteractionId(interactionId: InteractionId): PromptExecutionDelegate {
+            return this@FakePromptRunner.copy(interactionId = interactionId).DelegateAdapter()
+        }
+
+        override fun withLlm(llm: LlmOptions): PromptExecutionDelegate {
+            return this@FakePromptRunner.copy(llm = llm).DelegateAdapter()
+        }
+
+        override fun withMessages(messages: List<Message>): PromptExecutionDelegate {
+            return this@FakePromptRunner.copy(messages = this@FakePromptRunner.messages + messages).DelegateAdapter()
+        }
+
+        override fun withImages(images: List<AgentImage>): PromptExecutionDelegate {
+            return this@FakePromptRunner.copy(images = this@FakePromptRunner.images + images).DelegateAdapter()
+        }
+
+        override fun withToolGroup(toolGroup: ToolGroupRequirement): PromptExecutionDelegate {
+            return this@FakePromptRunner.copy(toolGroups = this@FakePromptRunner.toolGroups + toolGroup)
+                .DelegateAdapter()
+        }
+
+        override fun withToolGroup(toolGroup: ToolGroup): PromptExecutionDelegate {
+            return this@FakePromptRunner.copy(otherTools = this@FakePromptRunner.otherTools + toolGroup.tools)
+                .DelegateAdapter()
+        }
+
+        override fun withToolObject(toolObject: ToolObject): PromptExecutionDelegate {
+            return this@FakePromptRunner.copy(toolObjects = this@FakePromptRunner.toolObjects + toolObject)
+                .DelegateAdapter()
+        }
+
+        override fun withTool(tool: Tool): PromptExecutionDelegate {
+            return this@FakePromptRunner.copy(otherTools = this@FakePromptRunner.otherTools + tool).DelegateAdapter()
+        }
+
+        override fun withHandoffs(vararg outputTypes: Class<*>): PromptExecutionDelegate {
+            TODO("Implement handoff support")
+        }
+
+        override fun withSubagents(vararg subagents: Subagent): PromptExecutionDelegate {
+            TODO("Implement subagent handoff support")
+        }
+
+        override fun withPromptContributors(promptContributors: List<PromptContributor>): PromptExecutionDelegate {
+            return this@FakePromptRunner.copy(
+                promptContributors = this@FakePromptRunner.promptContributors + promptContributors
+            ).DelegateAdapter()
+        }
+
+        override fun withContextualPromptContributors(
+            contextualPromptContributors: List<ContextualPromptElement>,
+        ): PromptExecutionDelegate {
+            return this@FakePromptRunner.copy(
+                contextualPromptContributors = this@FakePromptRunner.contextualPromptContributors + contextualPromptContributors
+            ).DelegateAdapter()
+        }
+
+        override fun withGenerateExamples(generateExamples: Boolean): PromptExecutionDelegate {
+            return this@FakePromptRunner.copy(generateExamples = generateExamples).DelegateAdapter()
+        }
+
+        override fun withPropertyFilter(filter: Predicate<String>): PromptExecutionDelegate {
+            return this@FakePromptRunner.copy(propertyFilter = this@FakePromptRunner.propertyFilter.and(filter))
+                .DelegateAdapter()
+        }
+
+        override fun withValidation(validation: Boolean): PromptExecutionDelegate {
+            return this@FakePromptRunner.copy(validation = validation).DelegateAdapter()
+        }
+
+        override fun withGuardRails(vararg guards: GuardRail): PromptExecutionDelegate {
+            return this@FakePromptRunner.copy(guardRails = this@FakePromptRunner.guardRails + guards).DelegateAdapter()
+        }
+
+        override fun <T> createObject(messages: List<Message>, outputClass: Class<T>): T {
+            return this@FakePromptRunner.createObject(messages, outputClass)
+        }
+
+        override fun <T> createObjectIfPossible(messages: List<Message>, outputClass: Class<T>): T? {
+            return this@FakePromptRunner.createObjectIfPossible(messages, outputClass)
+        }
+
+        override fun supportsStreaming(): Boolean = false
+
+        override fun generateStream(): Flux<String> {
+            TODO("Not yet implemented")
+        }
+
+        override fun <T> createObjectStream(itemClass: Class<T>): Flux<T> {
+            TODO("Not yet implemented")
+        }
+
+        override fun <T> createObjectStreamWithThinking(itemClass: Class<T>): Flux<StreamingEvent<T>> {
+            TODO("Not yet implemented")
+        }
+
+        override fun supportsThinking(): Boolean = false
+        override fun <T> createObjectIfPossibleWithThinking(
+            messages: List<Message>,
+            outputClass: Class<T>,
+        ): ThinkingResponse<T?> {
+            TODO("Not yet implemented")
+        }
+
+        override fun <T> createObjectWithThinking(
+            messages: List<Message>,
+            outputClass: Class<T>,
+        ): ThinkingResponse<T> {
+            TODO("Not yet implemented")
+        }
+
+        override fun respondWithThinking(messages: List<Message>): ThinkingResponse<AssistantMessage> {
+            TODO("Not yet implemented")
+        }
+
+        override fun evaluateConditionWithThinking(
+            condition: String,
+            context: String,
+            confidenceThreshold: ZeroToOne,
+        ): ThinkingResponse<Boolean> {
+            TODO("Not yet implemented")
+        }
     }
 
     override fun withInteractionId(interactionId: InteractionId): PromptRunner =
@@ -114,10 +290,7 @@ data class FakePromptRunner(
                     """.trimIndent()
             )
         }
-        val maybeT = responses[llmInvocations.size - 1]
-        if (maybeT == null) {
-            return null
-        }
+        val maybeT = responses[llmInvocations.size - 1] ?: return null
         if (!outputClass.isInstance(maybeT)) {
             throw IllegalStateException(
                 "Expected response of type ${outputClass.name}, but got ${maybeT.javaClass.name}."
@@ -196,18 +369,19 @@ data class FakePromptRunner(
     override fun withGenerateExamples(generateExamples: Boolean): PromptRunner =
         copy(generateExamples = generateExamples)
 
+    @Deprecated("Use creating().withPropertyFilter() instead")
     override fun withPropertyFilter(filter: Predicate<String>): PromptRunner =
         copy(propertyFilter = this.propertyFilter.and(filter))
 
+    @Deprecated("Use creating().withValidation() instead")
     override fun withValidation(validation: Boolean): PromptRunner =
         copy(validation = validation)
-
 
     private fun createLlmInteraction() =
         LlmInteraction(
             llm = llm ?: LlmOptions(),
             toolGroups = this.toolGroups + toolGroups,
-            toolCallbacks = safelyGetToolCallbacks(toolObjects) + otherToolCallbacks,
+            tools = safelyGetTools(toolObjects) + otherTools,
             promptContributors = promptContributors + contextualPromptContributors.map {
                 it.toPromptContributor(
                     context
@@ -217,11 +391,10 @@ data class FakePromptRunner(
             generateExamples = generateExamples,
         )
 
-    override fun withTemplate(templateName: String): TemplateOperations {
-        return TemplateOperations(
-            templateName,
-            templateRenderer = JinjavaTemplateRenderer(),
-            promptRunnerOperations = this,
+    override fun rendering(templateName: String): PromptRunner.Rendering {
+        return DelegatingRendering(
+            delegate = DelegateAdapter(),
+            templateName = templateName,
         )
     }
 
@@ -233,14 +406,20 @@ data class FakePromptRunner(
         TODO("Implement subagent handoff support")
     }
 
-    override fun withToolGroup(toolGroup: ToolGroup): PromptRunner {
-        TODO("Not yet implemented")
-    }
+    override fun withToolGroup(toolGroup: ToolGroup): PromptRunner =
+        copy(otherTools = this.otherTools + toolGroup.tools)
 
     override fun withTool(tool: Tool): PromptRunner =
-        copy(otherToolCallbacks = this.otherToolCallbacks + tool.toSpringToolCallback())
+        copy(otherTools = this.otherTools + tool)
 
-    override fun <T> creating(outputClass: Class<T>): ObjectCreator<T> {
-        return PromptRunnerObjectCreator(this, outputClass, jacksonObjectMapper())
+    override fun <T> creating(outputClass: Class<T>): PromptRunner.Creating<T> {
+        return DelegatingCreating(
+            delegate = DelegateAdapter(),
+            outputClass = outputClass,
+        )
+    }
+
+    override fun withGuardRails(vararg guards: GuardRail): PromptRunner {
+        return copy(guardRails = this.guardRails + guards)
     }
 }

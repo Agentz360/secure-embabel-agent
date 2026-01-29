@@ -16,17 +16,31 @@
 package com.embabel.agent.api.tool
 
 import com.embabel.agent.api.annotation.LlmTool
-import com.embabel.agent.api.annotation.LlmTool.Param
+import com.embabel.agent.api.annotation.MatryoshkaTools
+import com.embabel.agent.api.tool.Tool.Definition
+import com.embabel.agent.core.ReplanRequestedException
+import com.embabel.agent.spi.support.DelegatingTool
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import org.slf4j.LoggerFactory
 import kotlin.reflect.KFunction
-import kotlin.reflect.KParameter
 import kotlin.reflect.full.findAnnotation
 import kotlin.reflect.full.functions
 import kotlin.reflect.full.hasAnnotation
-import kotlin.reflect.jvm.javaMethod
-import kotlin.reflect.jvm.javaType
+
+/**
+ * Tool information including definition and metadata,
+ * without execution logic.
+ */
+interface ToolInfo {
+
+    /** Tool definition for LLM */
+    val definition: Definition
+
+    /** Optional metadata */
+    val metadata: Tool.Metadata get() = Tool.Metadata.DEFAULT
+
+}
 
 /**
  * Framework-agnostic tool that can be invoked by an LLM.
@@ -35,13 +49,8 @@ import kotlin.reflect.jvm.javaType
  * All nested types are scoped within this interface to avoid naming conflicts with
  * framework-specific types (e.g., Spring AI's ToolDefinition, ToolMetadata).
  */
-interface Tool {
+interface Tool : ToolInfo {
 
-    /** Tool definition for LLM */
-    val definition: Definition
-
-    /** Optional metadata */
-    val metadata: Metadata get() = Metadata.DEFAULT
 
     /**
      * Execute the tool with JSON input.
@@ -121,6 +130,8 @@ interface Tool {
      * @param description Parameter description. Defaults to name if not provided.
      * @param required Whether the parameter is required. Defaults to true.
      * @param enumValues Optional list of allowed values (for enum parameters)
+     * @param properties Nested properties for OBJECT type parameters
+     * @param itemType Element type for ARRAY type parameters (e.g., STRING for List<String>)
      */
     data class Parameter @JvmOverloads constructor(
         val name: String,
@@ -128,6 +139,8 @@ interface Tool {
         val description: String = name,
         val required: Boolean = true,
         val enumValues: List<String>? = null,
+        val properties: List<Parameter>? = null,
+        val itemType: ParameterType? = null,
     ) {
 
         companion object {
@@ -403,10 +416,14 @@ interface Tool {
         /**
          * Create Tools from all methods annotated with [LlmTool] on an instance.
          *
+         * If the instance's class is annotated with [@MatryoshkaTools][MatryoshkaTools],
+         * returns a single [MatryoshkaTool] containing all the inner tools.
+         * Otherwise, returns individual tools for each annotated method.
+         *
          * @param instance The object instance to scan for annotated methods
          * @param objectMapper ObjectMapper for JSON parsing (optional)
-         * @return List of Tools, one for each annotated method
-         * @throws IllegalArgumentException if no methods are annotated with @Tool.Method
+         * @return List of Tools, one for each annotated method (or single MatryoshkaTool if @MatryoshkaTools present)
+         * @throws IllegalArgumentException if no methods are annotated with @LlmTool
          */
         @JvmStatic
         @JvmOverloads
@@ -414,6 +431,11 @@ interface Tool {
             instance: Any,
             objectMapper: ObjectMapper = jacksonObjectMapper(),
         ): List<Tool> {
+            // Check for @MatryoshkaTools annotation first
+            if (instance::class.hasAnnotation<MatryoshkaTools>()) {
+                return listOf(MatryoshkaTool.fromInstance(instance, objectMapper))
+            }
+
             val tools = instance::class.functions
                 .filter { it.hasAnnotation<LlmTool>() }
                 .map { fromMethod(instance, it, objectMapper) }
@@ -456,7 +478,176 @@ interface Tool {
                 emptyList()
             }
         }
+
+        /**
+         * Make this tool always replan after execution, adding the artifact to the blackboard.
+         */
+        @JvmStatic
+        fun replanAlways(tool: Tool): Tool {
+            return ConditionalReplanningTool(tool) { context ->
+                ReplanDecision("${tool.definition.name} replans") { bb ->
+                    context.artifact?.let { bb.addObject(it) }
+                }
+            }
+        }
+
+        /**
+         * When the decider returns a [ReplanDecision], replan after execution, adding the artifact
+         * to the blackboard along with any additional updates from the decision.
+         * The decider receives the artifact cast to type T and the replan context.
+         * If the artifact is null or cannot be cast to T, the decider is not called.
+         */
+        @JvmStatic
+        @Suppress("UNCHECKED_CAST")
+        fun <T> conditionalReplan(
+            tool: Tool,
+            decider: (t: T, replanContext: ReplanContext) -> ReplanDecision?,
+        ): DelegatingTool {
+            return ConditionalReplanningTool(tool) { replanContext ->
+                val artifact = replanContext.artifact ?: return@ConditionalReplanningTool null
+                try {
+                    val decision = decider(artifact as T, replanContext)
+                        ?: return@ConditionalReplanningTool null
+                    ReplanDecision(decision.reason) { bb ->
+                        bb.addObject(artifact)
+                        decision.blackboardUpdater.accept(bb)
+                    }
+                } catch (_: ClassCastException) {
+                    null
+                }
+            }
+        }
+
+        /**
+         * When the predicate matches the tool result artifact, replan, adding the artifact to the blackboard.
+         * The predicate receives the artifact cast to type T.
+         * If the artifact is null or cannot be cast to T, returns normally.
+         */
+        @JvmStatic
+        @Suppress("UNCHECKED_CAST")
+        fun <T> replanWhen(
+            tool: Tool,
+            predicate: (t: T) -> Boolean,
+        ): DelegatingTool {
+            return ConditionalReplanningTool(tool) { replanContext ->
+                val artifact = replanContext.artifact ?: return@ConditionalReplanningTool null
+                try {
+                    if (predicate(artifact as T)) {
+                        ReplanDecision("${tool.definition.name} replans based on result") { bb ->
+                            bb.addObject(artifact)
+                        }
+                    } else {
+                        null
+                    }
+                } catch (_: ClassCastException) {
+                    null
+                }
+            }
+        }
+
+        /**
+         * Replan and add the object returned by the predicate to the blackboard.
+         * @param tool The tool to wrap
+         * @param valueComputer Function that takes the artifact of type T and returns an object to add to the blackboard, or null to not replan
+         */
+        @JvmStatic
+        @Suppress("UNCHECKED_CAST")
+        fun <T> replanAndAdd(
+            tool: Tool,
+            valueComputer: (t: T) -> Any?,
+        ): DelegatingTool {
+            return ConditionalReplanningTool(tool) { replanContext ->
+                val artifact = replanContext.artifact ?: return@ConditionalReplanningTool null
+                try {
+                    val toAdd = valueComputer(artifact as T)
+                    if (toAdd != null) {
+                        ReplanDecision("${tool.definition.name} replans based on result") { bb ->
+                            bb.addObject(toAdd)
+                        }
+                    } else {
+                        null
+                    }
+                } catch (_: ClassCastException) {
+                    null
+                }
+            }
+        }
+
+        /**
+         * Format a list of tools as an ASCII tree structure.
+         * MatryoshkaTools are expanded recursively to show their inner tools.
+         *
+         * @param name The name to display at the root of the tree
+         * @param tools The list of tools to format
+         * @return A formatted tree string, or a message if no tools are present
+         */
+        @JvmStatic
+        fun formatToolTree(name: String, tools: List<Tool>): String {
+            if (tools.isEmpty()) {
+                return "$name has no tools"
+            }
+
+            val sb = StringBuilder()
+            sb.append(name).append("\n")
+            formatToolsRecursive(sb, tools, "")
+            return sb.toString().trim()
+        }
+
+        private fun formatToolsRecursive(sb: StringBuilder, tools: List<Tool>, indent: String) {
+            tools.forEachIndexed { i, tool ->
+                val isLast = i == tools.size - 1
+                val prefix = if (isLast) "└── " else "├── "
+                val childIndent = indent + if (isLast) "    " else "│   "
+
+                if (tool is MatryoshkaTool) {
+                    sb.append(indent).append(prefix).append(tool.definition.name)
+                        .append(" (").append(tool.innerTools.size).append(" inner tools)\n")
+                    formatToolsRecursive(sb, tool.innerTools, childIndent)
+                } else {
+                    sb.append(indent).append(prefix).append(tool.definition.name).append("\n")
+                }
+            }
+        }
     }
+
+    /**
+     * Create a new tool with a different description.
+     * Useful for providing context-specific descriptions while keeping the same functionality.
+     *
+     * @param newDescription The new description to use
+     * @return A new Tool with the updated description
+     */
+    fun withDescription(newDescription: String): Tool = DescribedTool(this, newDescription)
+
+    /**
+     * Create a new tool with an additional note appended to the description.
+     * Useful for adding context-specific hints to an existing tool.
+     *
+     * @param note The note to append to the description
+     * @return A new Tool with the note appended to its description
+     */
+    fun withNote(note: String): Tool = DescribedTool(this, "${definition.description}. $note")
+}
+
+/**
+ * A tool wrapper that overrides the description while delegating all functionality.
+ * Implements [DelegatingTool] to support unwrapping in injection strategies.
+ */
+private class DescribedTool(
+    override val delegate: Tool,
+    private val customDescription: String,
+) : DelegatingTool {
+
+    override val definition: Tool.Definition = Tool.Definition(
+        name = delegate.definition.name,
+        description = customDescription,
+        inputSchema = delegate.definition.inputSchema,
+    )
+
+    override val metadata: Tool.Metadata
+        get() = delegate.metadata
+
+    override fun call(input: String): Tool.Result = delegate.call(input)
 }
 
 // Private implementations
@@ -476,27 +667,16 @@ private data class SimpleInputSchema(
     }
 
     override fun toJsonSchema(): String {
+        return objectMapper.writeValueAsString(buildSchemaMap(parameters))
+    }
+
+    private fun buildSchemaMap(params: List<Tool.Parameter>): Map<String, Any> {
         val properties = mutableMapOf<String, Any>()
-        parameters.forEach { param ->
-            val typeStr = when (param.type) {
-                Tool.ParameterType.STRING -> "string"
-                Tool.ParameterType.INTEGER -> "integer"
-                Tool.ParameterType.NUMBER -> "number"
-                Tool.ParameterType.BOOLEAN -> "boolean"
-                Tool.ParameterType.ARRAY -> "array"
-                Tool.ParameterType.OBJECT -> "object"
-            }
-            val propMap = mutableMapOf<String, Any>(
-                "type" to typeStr,
-                "description" to param.description,
-            )
-            param.enumValues?.let { values ->
-                propMap["enum"] = values
-            }
-            properties[param.name] = propMap
+        params.forEach { param ->
+            properties[param.name] = buildParameterSchema(param)
         }
 
-        val required = parameters.filter { it.required }.map { it.name }
+        val required = params.filter { it.required }.map { it.name }
 
         val schema = mutableMapOf<String, Any>(
             "type" to "object",
@@ -505,8 +685,56 @@ private data class SimpleInputSchema(
         if (required.isNotEmpty()) {
             schema["required"] = required
         }
+        return schema
+    }
 
-        return objectMapper.writeValueAsString(schema)
+    private fun buildParameterSchema(param: Tool.Parameter): Map<String, Any> {
+        val typeStr = when (param.type) {
+            Tool.ParameterType.STRING -> "string"
+            Tool.ParameterType.INTEGER -> "integer"
+            Tool.ParameterType.NUMBER -> "number"
+            Tool.ParameterType.BOOLEAN -> "boolean"
+            Tool.ParameterType.ARRAY -> "array"
+            Tool.ParameterType.OBJECT -> "object"
+        }
+
+        val propMap = mutableMapOf<String, Any>(
+            "type" to typeStr,
+            "description" to param.description,
+        )
+
+        param.enumValues?.let { values ->
+            propMap["enum"] = values
+        }
+
+        // For ARRAY types with itemType, add items property
+        if (param.type == Tool.ParameterType.ARRAY && param.itemType != null) {
+            val itemTypeStr = when (param.itemType) {
+                Tool.ParameterType.STRING -> "string"
+                Tool.ParameterType.INTEGER -> "integer"
+                Tool.ParameterType.NUMBER -> "number"
+                Tool.ParameterType.BOOLEAN -> "boolean"
+                Tool.ParameterType.ARRAY -> "array"
+                Tool.ParameterType.OBJECT -> "object"
+            }
+            propMap["items"] = mapOf("type" to itemTypeStr)
+        }
+
+        // For OBJECT types with nested properties, add them recursively
+        if (param.type == Tool.ParameterType.OBJECT && !param.properties.isNullOrEmpty()) {
+            val nestedProperties = mutableMapOf<String, Any>()
+            param.properties.forEach { nested ->
+                nestedProperties[nested.name] = buildParameterSchema(nested)
+            }
+            propMap["properties"] = nestedProperties
+
+            val nestedRequired = param.properties.filter { it.required }.map { it.name }
+            if (nestedRequired.isNotEmpty()) {
+                propMap["required"] = nestedRequired
+            }
+        }
+
+        return propMap
     }
 }
 
@@ -522,175 +750,4 @@ private class FunctionalTool(
 ) : Tool {
     override fun call(input: String): Tool.Result =
         function.invoke(input)
-}
-
-/**
- * Tool implementation that wraps a method annotated with @Tool.Method.
- */
-private class MethodTool(
-    private val instance: Any,
-    private val method: KFunction<*>,
-    annotation: LlmTool,
-    private val objectMapper: ObjectMapper,
-) : Tool {
-
-    private val logger = LoggerFactory.getLogger(MethodTool::class.java)
-
-    override val definition: Tool.Definition = createDefinition(method, annotation)
-
-    override val metadata: Tool.Metadata = Tool.Metadata(returnDirect = annotation.returnDirect)
-
-    override fun call(input: String): Tool.Result {
-        return try {
-            val args = parseArguments(input)
-            val result = invokeMethod(args)
-            convertResult(result)
-        } catch (e: Exception) {
-            // Unwrap InvocationTargetException to get the actual cause
-            val actualCause = e.cause ?: e
-            val message = actualCause.message ?: e.message ?: "Tool invocation failed"
-            logger.error("Error invoking tool '{}': {}", definition.name, message, actualCause)
-            Tool.Result.error(message, actualCause)
-        }
-    }
-
-    private fun createDefinition(
-        method: KFunction<*>,
-        annotation: LlmTool,
-    ): Tool.Definition {
-        val name = annotation.name.ifEmpty { method.name }
-        val parameters = method.parameters
-            .filter { it.kind == KParameter.Kind.VALUE }
-            .map { param ->
-                val paramAnnotation = param.findAnnotation<Param>()
-                Tool.Parameter(
-                    name = param.name ?: "arg${param.index}",
-                    type = mapKotlinTypeToParameterType(param.type),
-                    description = paramAnnotation?.description ?: "",
-                    required = paramAnnotation?.required ?: !param.isOptional,
-                )
-            }
-
-        return Tool.Definition(
-            name = name,
-            description = annotation.description,
-            inputSchema = SimpleInputSchema(parameters),
-        )
-    }
-
-    private fun mapKotlinTypeToParameterType(type: kotlin.reflect.KType): Tool.ParameterType {
-        val classifier = type.classifier
-        return when {
-            classifier == String::class -> Tool.ParameterType.STRING
-            classifier == Int::class || classifier == Long::class -> Tool.ParameterType.INTEGER
-            classifier == Double::class || classifier == Float::class -> Tool.ParameterType.NUMBER
-            classifier == Boolean::class -> Tool.ParameterType.BOOLEAN
-            classifier == List::class || classifier == Array::class -> Tool.ParameterType.ARRAY
-            else -> Tool.ParameterType.OBJECT
-        }
-    }
-
-    @Suppress("UNCHECKED_CAST")
-    private fun parseArguments(input: String): Map<String, Any?> {
-        if (input.isBlank()) return emptyMap()
-        return try {
-            objectMapper.readValue(input, Map::class.java) as Map<String, Any?>
-        } catch (e: Exception) {
-            logger.warn("Failed to parse tool input as JSON: {}", e.message)
-            emptyMap()
-        }
-    }
-
-    private fun invokeMethod(args: Map<String, Any?>): Any? {
-        val params = method.parameters
-        val callArgs = mutableMapOf<KParameter, Any?>()
-
-        for (param in params) {
-            when (param.kind) {
-                KParameter.Kind.INSTANCE -> callArgs[param] = instance
-                KParameter.Kind.VALUE -> {
-                    val paramName = param.name ?: continue
-                    val value = args[paramName]
-
-                    if (value != null) {
-                        // Convert value to expected type if needed
-                        val convertedValue = convertToExpectedType(value, param)
-                        callArgs[param] = convertedValue
-                    } else if (!param.isOptional) {
-                        // Required parameter is missing - use null or throw
-                        if (param.type.isMarkedNullable) {
-                            callArgs[param] = null
-                        }
-                        // If not nullable and optional, we skip it to use default value
-                    }
-                    // If optional and no value provided, skip to use default
-                }
-
-                else -> {} // Skip extension receivers etc.
-            }
-        }
-
-        // Make method accessible for non-public classes/methods (e.g., package-protected Java classes)
-        method.javaMethod?.isAccessible = true
-        return method.callBy(callArgs)
-    }
-
-    private fun convertToExpectedType(
-        value: Any,
-        param: KParameter,
-    ): Any? {
-        val targetType = param.type.javaType
-
-        // If already correct type, return as-is
-        if (targetType is Class<*> && targetType.isInstance(value)) {
-            return value
-        }
-
-        // Handle numeric conversions from JSON (Jackson often returns Int/Double)
-        return when {
-            targetType == Int::class.java || targetType == Integer::class.java ->
-                (value as? Number)?.toInt() ?: value
-
-            targetType == Long::class.java || targetType == java.lang.Long::class.java ->
-                (value as? Number)?.toLong() ?: value
-
-            targetType == Double::class.java || targetType == java.lang.Double::class.java ->
-                (value as? Number)?.toDouble() ?: value
-
-            targetType == Float::class.java || targetType == java.lang.Float::class.java ->
-                (value as? Number)?.toFloat() ?: value
-
-            targetType == Boolean::class.java || targetType == java.lang.Boolean::class.java ->
-                value as? Boolean ?: value.toString().toBoolean()
-
-            targetType == String::class.java ->
-                value.toString()
-
-            else -> {
-                // For complex types, try to convert via ObjectMapper
-                try {
-                    objectMapper.convertValue(value, objectMapper.constructType(targetType))
-                } catch (e: Exception) {
-                    logger.warn("Failed to convert {} to {}: {}", value, targetType, e.message)
-                    value
-                }
-            }
-        }
-    }
-
-    private fun convertResult(result: Any?): Tool.Result {
-        return when (result) {
-            null -> Tool.Result.text("")
-            is String -> Tool.Result.text(result)
-            is Tool.Result -> result
-            else -> {
-                // Convert to JSON string
-                try {
-                    Tool.Result.text(objectMapper.writeValueAsString(result))
-                } catch (e: Exception) {
-                    Tool.Result.text(result.toString())
-                }
-            }
-        }
-    }
 }

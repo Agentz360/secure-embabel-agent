@@ -18,10 +18,10 @@ package com.embabel.agent.api.annotation.support
 import com.embabel.agent.api.annotation.State
 import com.embabel.agent.api.annotation.Action as ActionAnnotation
 import com.embabel.agent.api.common.TransformationActionContext
+import com.embabel.agent.api.tool.Tool
 import com.embabel.agent.core.Action
 import com.embabel.agent.core.IoBinding
 import com.embabel.agent.core.ToolGroupRequirement
-import org.springframework.ai.tool.ToolCallback
 import java.lang.reflect.Method
 
 /**
@@ -44,17 +44,19 @@ interface ActionMethodManager {
      */
     val argumentResolvers: List<ActionMethodArgumentResolver>
 
+    val actionQosProvider: ActionQosProvider
+
     /**
      * Create an Action from a method
      * @param method the method to create an action from
      * @param instance instance of Agent or AgentCapabilities-annotated class
-     * @param toolCallbacksOnInstance tool callbacks to use from instance level
+     * @param toolsOnInstance tools to use from instance level
      * @param costMethods map of cost method name to CostMethodInfo for dynamic cost/value computation
      */
     fun createAction(
         method: Method,
         instance: Any,
-        toolCallbacksOnInstance: List<ToolCallback>,
+        toolsOnInstance: List<Tool>,
         costMethods: Map<String, CostMethodInfo> = emptyMap(),
     ): Action
 
@@ -120,10 +122,12 @@ private fun isStateTypeRecursive(clazz: Class<*>?, visited: MutableSet<Class<*>>
 
 /**
  * Compute whether an action should clear the blackboard.
- * Returns true if the method returns a @State type or if explicitly set in annotation.
+ * Returns true only if explicitly set in annotation.
+ * State transitions no longer automatically clear the blackboard to preserve
+ * context needed for replanning and trigger-based state actions.
  */
 internal fun computeClearBlackboard(method: Method, actionAnnotation: ActionAnnotation): Boolean =
-    isStateType(method.returnType) || actionAnnotation.clearBlackboard
+    actionAnnotation.clearBlackboard
 
 /**
  * Compute trigger preconditions for an action method.
@@ -137,10 +141,3 @@ internal fun computeTriggerPreconditions(method: Method): List<String> {
         emptyList()
     }
 }
-
-/**
- * Compute tool group requirements from an @Action annotation.
- */
-internal fun computeToolGroups(actionAnnotation: ActionAnnotation): Set<ToolGroupRequirement> =
-    (actionAnnotation.toolGroupRequirements.map { ToolGroupRequirement(it.role) } +
-            actionAnnotation.toolGroups.map { ToolGroupRequirement(it) }).toSet()

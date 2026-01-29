@@ -19,21 +19,26 @@ import com.embabel.agent.api.annotation.support.Wumpus
 import com.embabel.agent.api.common.InteractionId
 import com.embabel.agent.api.common.ToolObject
 import com.embabel.agent.core.AgentProcess
+import com.embabel.agent.core.Blackboard
 import com.embabel.agent.core.ProcessContext
-import com.embabel.agent.core.support.safelyGetToolCallbacksFrom
-import com.embabel.agent.spi.InvalidLlmReturnFormatException
-import com.embabel.agent.spi.InvalidLlmReturnTypeException
-import com.embabel.agent.spi.LlmInteraction
+import com.embabel.agent.core.support.safelyGetToolsFrom
+import com.embabel.agent.core.support.InvalidLlmReturnFormatException
+import com.embabel.agent.core.support.InvalidLlmReturnTypeException
+import com.embabel.agent.core.support.LlmInteraction
 import com.embabel.agent.spi.LlmOperations
 import com.embabel.agent.spi.support.springai.ChatClientLlmOperations
 import com.embabel.agent.spi.support.springai.DefaultToolDecorator
 import com.embabel.agent.spi.support.springai.MaybeReturn
+import com.embabel.agent.spi.support.springai.SpringAiLlmService
 import com.embabel.agent.spi.validation.DefaultValidationPromptGenerator
 import com.embabel.agent.support.SimpleTestAgent
 import com.embabel.agent.test.common.EventSavingAgenticEventListener
 import com.embabel.chat.SystemMessage
 import com.embabel.chat.UserMessage
-import com.embabel.common.ai.model.*
+import com.embabel.common.ai.model.DefaultOptionsConverter
+import com.embabel.common.ai.model.LlmOptions
+import com.embabel.common.ai.model.ModelProvider
+import com.embabel.common.ai.model.ModelSelectionCriteria
 import com.embabel.common.textio.template.JinjavaTemplateRenderer
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
@@ -132,9 +137,13 @@ class ChatClientLlmOperationsTest {
         every { mockAgentProcess.agent } returns SimpleTestAgent
         every { mockAgentProcess.processContext } returns mockProcessContext
 
+        // Add blackboard for guardrail validation (defensive - returns null if not needed)
+        val blackboard = mockk<com.embabel.agent.core.Blackboard>(relaxed = true)
+        every { mockAgentProcess.blackboard } returns blackboard
+
         val mockModelProvider = mockk<ModelProvider>()
         val crit = slot<ModelSelectionCriteria>()
-        val fakeLlm = Llm("fake", "provider", fakeChatModel, DefaultOptionsConverter)
+        val fakeLlm = SpringAiLlmService("fake", "provider", fakeChatModel, DefaultOptionsConverter)
         every { mockModelProvider.getLlm(capture(crit)) } returns fakeLlm
         val cco = ChatClientLlmOperations(
             modelProvider = mockModelProvider,
@@ -298,7 +307,7 @@ class ChatClientLlmOperationsTest {
             val fakeChatModel = FakeChatModel(jacksonObjectMapper().writeValueAsString(duke))
 
             // Wumpus's have tools
-            val toolCallbacks = safelyGetToolCallbacksFrom(ToolObject(Wumpus("wumpy")))
+            val tools = safelyGetToolsFrom(ToolObject(Wumpus("wumpy")))
             val setup = createChatClientLlmOperations(fakeChatModel)
             val result = setup.llmOperations.doTransform(
                 messages = listOf(
@@ -308,18 +317,18 @@ class ChatClientLlmOperationsTest {
                 interaction = LlmInteraction(
                     id = InteractionId("id"),
                     llm = LlmOptions(),
-                    toolCallbacks = toolCallbacks,
+                    tools = tools,
                 ),
                 outputClass = Dog::class.java,
                 llmRequestEvent = null,
             )
             assertEquals(duke, result)
             assertEquals(1, fakeChatModel.promptsPassed.size)
-            val tools = fakeChatModel.optionsPassed[0].toolCallbacks
-            assertEquals(toolCallbacks.size, tools.size, "Must have passed same number of tools")
+            val passedTools = fakeChatModel.optionsPassed[0].toolCallbacks
+            assertEquals(tools.size, passedTools.size, "Must have passed same number of tools")
             assertEquals(
-                toolCallbacks.map { it.toolDefinition.name() }.toSet(),
-                tools.map { it.toolDefinition.name() }.toSet(),
+                tools.map { it.definition.name }.toSet(),
+                passedTools.map { it.toolDefinition.name() }.toSet(),
             )
         }
 
@@ -329,15 +338,15 @@ class ChatClientLlmOperationsTest {
 
             val fakeChatModel = FakeChatModel(jacksonObjectMapper().writeValueAsString(duke))
 
-            // Wumpus's have tools
-            val toolCallbacks = safelyGetToolCallbacksFrom(ToolObject(Wumpus("wumpy")))
+            // Wumpus's have tools - use native Tool interface
+            val tools = safelyGetToolsFrom(ToolObject(Wumpus("wumpy")))
             val setup = createChatClientLlmOperations(fakeChatModel)
             val result = setup.llmOperations.createObject(
                 messages = listOf(UserMessage("prompt")),
                 interaction = LlmInteraction(
                     id = InteractionId("id"),
                     llm = LlmOptions(),
-                    toolCallbacks = toolCallbacks,
+                    tools = tools,
                 ),
                 outputClass = Dog::class.java,
                 action = SimpleTestAgent.actions.first(),
@@ -345,11 +354,11 @@ class ChatClientLlmOperationsTest {
             )
             assertEquals(duke, result)
             assertEquals(1, fakeChatModel.promptsPassed.size)
-            val tools = fakeChatModel.optionsPassed[0].toolCallbacks
-            assertEquals(toolCallbacks.size, tools.size, "Must have passed same number of tools")
+            val passedTools = fakeChatModel.optionsPassed[0].toolCallbacks
+            assertEquals(tools.size, passedTools.size, "Must have passed same number of tools")
             assertEquals(
-                toolCallbacks.map { it.toolDefinition.name() }.sorted(),
-                tools.map { it.toolDefinition.name() })
+                tools.map { it.definition.name }.sorted(),
+                passedTools.map { it.toolDefinition.name() })
         }
 
         @Test
@@ -559,26 +568,433 @@ class ChatClientLlmOperationsTest {
                 )
             )
 
-            // Wumpus's have tools
-            val toolCallbacks = safelyGetToolCallbacksFrom(ToolObject(Wumpus("wumpy")))
+            // Wumpus's have tools - use native Tool interface
+            val tools = safelyGetToolsFrom(ToolObject(Wumpus("wumpy")))
             val setup = createChatClientLlmOperations(fakeChatModel)
             setup.llmOperations.createObjectIfPossible(
                 messages = listOf(UserMessage("prompt")),
                 interaction = LlmInteraction(
                     id = InteractionId("id"),
                     llm = LlmOptions(),
-                    toolCallbacks = toolCallbacks,
+                    tools = tools,
                 ),
                 outputClass = Dog::class.java,
                 action = SimpleTestAgent.actions.first(),
                 agentProcess = setup.mockAgentProcess,
             )
             assertEquals(1, fakeChatModel.promptsPassed.size)
-            val tools = fakeChatModel.optionsPassed[0].toolCallbacks
-            assertEquals(toolCallbacks.size, tools.size, "Must have passed same number of tools")
+            val passedTools = fakeChatModel.optionsPassed[0].toolCallbacks
+            assertEquals(tools.size, passedTools.size, "Must have passed same number of tools")
             assertEquals(
-                toolCallbacks.map { it.toolDefinition.name() }.sorted(),
-                tools.map { it.toolDefinition.name() })
+                tools.map { it.definition.name }.sorted(),
+                passedTools.map { it.toolDefinition.name() })
+        }
+    }
+
+    @Nested
+    inner class TimeoutBehavior {
+
+        /**
+         * Fake ChatModel that introduces a delay before returning.
+         * Used to test timeout behavior.
+         */
+        inner class DelayingFakeChatModel(
+            private val response: String,
+            private val delayMillis: Long,
+            options: ChatOptions = DefaultChatOptions(),
+        ) : ChatModel {
+            private val defaultOptions = options
+            val callCount = java.util.concurrent.atomic.AtomicInteger(0)
+
+            override fun getDefaultOptions(): ChatOptions = defaultOptions
+
+            override fun call(prompt: Prompt): ChatResponse {
+                callCount.incrementAndGet()
+                Thread.sleep(delayMillis)
+                val options = prompt.options as? ToolCallingChatOptions
+                    ?: throw IllegalArgumentException("Expected ToolCallingChatOptions")
+                return ChatResponse(listOf(Generation(AssistantMessage(response))))
+            }
+        }
+
+        @Test
+        fun `Spring AI path should timeout when LLM call exceeds timeout`() {
+            // LLM takes 2000ms, but timeout is 200ms - should definitely timeout
+            val duke = Dog("Duke")
+            val delayingChatModel = DelayingFakeChatModel(
+                response = jacksonObjectMapper().writeValueAsString(duke),
+                delayMillis = 2000,
+            )
+
+            val setup = createChatClientLlmOperationsWithDelayingModel(delayingChatModel)
+
+            // Spring AI path (useEmbabelToolLoop=false) has timeout - should fail
+            val exception = assertThrows(RuntimeException::class.java) {
+                setup.llmOperations.createObject(
+                    messages = listOf(UserMessage("Give me a dog")),
+                    interaction = LlmInteraction(
+                        id = InteractionId("timeout-test-springai"),
+                        llm = LlmOptions().withTimeout(java.time.Duration.ofMillis(200)),
+                        useEmbabelToolLoop = false,
+                    ),
+                    outputClass = Dog::class.java,
+                    action = SimpleTestAgent.actions.first(),
+                    agentProcess = setup.mockAgentProcess,
+                )
+            }
+
+            assertTrue(
+                exception.message?.contains("timed out") == true ||
+                exception.cause is java.util.concurrent.TimeoutException,
+                "Should have timed out, but got: ${exception.message}"
+            )
+        }
+
+        @Test
+        fun `Embabel tool loop path should timeout when LLM call exceeds timeout`() {
+            // LLM takes 500ms, but timeout is 100ms - should timeout
+            // THIS TEST CURRENTLY FAILS because Embabel tool loop has no timeout!
+            val duke = Dog("Duke")
+            val delayingChatModel = DelayingFakeChatModel(
+                response = jacksonObjectMapper().writeValueAsString(duke),
+                delayMillis = 500,
+            )
+
+            val setup = createChatClientLlmOperationsWithDelayingModel(delayingChatModel)
+
+            // Embabel tool loop path (useEmbabelToolLoop=true) should also timeout
+            val exception = assertThrows(RuntimeException::class.java) {
+                setup.llmOperations.createObject(
+                    messages = listOf(UserMessage("Give me a dog")),
+                    interaction = LlmInteraction(
+                        id = InteractionId("timeout-test-embabel"),
+                        llm = LlmOptions().withTimeout(java.time.Duration.ofMillis(100)),
+                        useEmbabelToolLoop = true,
+                    ),
+                    outputClass = Dog::class.java,
+                    action = SimpleTestAgent.actions.first(),
+                    agentProcess = setup.mockAgentProcess,
+                )
+            }
+
+            assertTrue(
+                exception.message?.contains("timed out") == true ||
+                exception.cause is java.util.concurrent.TimeoutException,
+                "Should have timed out, but got: ${exception.message}"
+            )
+        }
+
+        private fun createChatClientLlmOperationsWithDelayingModel(
+            delayingChatModel: DelayingFakeChatModel,
+        ): Setup {
+            val ese = EventSavingAgenticEventListener()
+            val mutableLlmInvocationHistory = MutableLlmInvocationHistory()
+            val mockProcessContext = mockk<ProcessContext>()
+            every { mockProcessContext.platformServices } returns mockk()
+            every { mockProcessContext.platformServices.agentPlatform } returns mockk()
+            every { mockProcessContext.platformServices.agentPlatform.toolGroupResolver } returns RegistryToolGroupResolver(
+                "mt",
+                emptyList()
+            )
+            every { mockProcessContext.platformServices.eventListener } returns ese
+            val mockAgentProcess = mockk<AgentProcess>()
+            every { mockAgentProcess.recordLlmInvocation(any()) } answers {
+                mutableLlmInvocationHistory.invocations.add(firstArg())
+            }
+            every { mockProcessContext.onProcessEvent(any()) } answers { ese.onProcessEvent(firstArg()) }
+            every { mockProcessContext.agentProcess } returns mockAgentProcess
+
+            every { mockAgentProcess.agent } returns SimpleTestAgent
+            every { mockAgentProcess.processContext } returns mockProcessContext
+
+            // Add blackboard for guardrail validation
+            val blackboard = mockk<Blackboard>(relaxed = true)
+            every { mockAgentProcess.blackboard } returns blackboard
+
+            val mockModelProvider = mockk<ModelProvider>()
+            val crit = slot<ModelSelectionCriteria>()
+            val fakeLlm = SpringAiLlmService("fake", "provider", delayingChatModel, DefaultOptionsConverter)
+            every { mockModelProvider.getLlm(capture(crit)) } returns fakeLlm
+            val promptsProperties = LlmOperationsPromptsProperties().apply {
+                defaultTimeout = java.time.Duration.ofMillis(100)  // Short default timeout
+            }
+            val cco = ChatClientLlmOperations(
+                modelProvider = mockModelProvider,
+                toolDecorator = DefaultToolDecorator(),
+                validator = Validation.buildDefaultValidatorFactory().validator,
+                validationPromptGenerator = DefaultValidationPromptGenerator(),
+                templateRenderer = JinjavaTemplateRenderer(),
+                objectMapper = jacksonObjectMapper().registerModule(JavaTimeModule()),
+                dataBindingProperties = LlmDataBindingProperties(maxAttempts = 1),  // No retries for timeout tests
+                llmOperationsPromptsProperties = promptsProperties,
+            )
+            return Setup(cco, mockAgentProcess, mutableLlmInvocationHistory)
+        }
+    }
+
+    @Nested
+    inner class RetryOnInvalidJson {
+
+        @Test
+        fun `should retry on invalid JSON and succeed with Embabel tool loop`() {
+            // This test demonstrates the bug: when useEmbabelToolLoop=true (default),
+            // InvalidLlmReturnFormatException is NOT retried, causing the operation to fail
+            // even when a subsequent attempt would succeed.
+            val duke = Dog("Duke")
+
+            // First response is invalid JSON, second is valid
+            val fakeChatModel = FakeChatModel(
+                responses = listOf(
+                    "This ain't no JSON - malformed response",
+                    jacksonObjectMapper().writeValueAsString(duke)
+                )
+            )
+
+            val setup = createChatClientLlmOperations(
+                fakeChatModel,
+                LlmDataBindingProperties(maxAttempts = 3)
+            )
+
+            // With useEmbabelToolLoop=true (default), this should retry and succeed
+            // Currently it fails because the Embabel tool loop path has no retry wrapper
+            val result = setup.llmOperations.createObject(
+                messages = listOf(UserMessage("Give me a dog")),
+                interaction = LlmInteraction(
+                    id = InteractionId("retry-test"),
+                    llm = LlmOptions(),
+                    useEmbabelToolLoop = true,  // This is the default, making it explicit
+                ),
+                outputClass = Dog::class.java,
+                action = SimpleTestAgent.actions.first(),
+                agentProcess = setup.mockAgentProcess,
+            )
+
+            assertEquals(duke, result, "Should have retried and got valid response")
+            assertEquals(2, fakeChatModel.promptsPassed.size, "Should have made 2 attempts")
+        }
+
+        @Test
+        fun `should retry on invalid JSON and succeed with Spring AI tool loop`() {
+            // This test shows the Spring AI path DOES have retry logic
+            val duke = Dog("Duke")
+
+            // First response is invalid JSON, second is valid
+            val fakeChatModel = FakeChatModel(
+                responses = listOf(
+                    "This ain't no JSON - malformed response",
+                    jacksonObjectMapper().writeValueAsString(duke)
+                )
+            )
+
+            val setup = createChatClientLlmOperations(
+                fakeChatModel,
+                LlmDataBindingProperties(maxAttempts = 3)
+            )
+
+            // With useEmbabelToolLoop=false, this uses Spring AI's path which has retry
+            val result = setup.llmOperations.createObject(
+                messages = listOf(UserMessage("Give me a dog")),
+                interaction = LlmInteraction(
+                    id = InteractionId("retry-test-springai"),
+                    llm = LlmOptions(),
+                    useEmbabelToolLoop = false,  // Use Spring AI path which has retry
+                ),
+                outputClass = Dog::class.java,
+                action = SimpleTestAgent.actions.first(),
+                agentProcess = setup.mockAgentProcess,
+            )
+
+            assertEquals(duke, result, "Should have retried and got valid response")
+            assertEquals(2, fakeChatModel.promptsPassed.size, "Should have made 2 attempts")
+        }
+    }
+
+    /**
+     * Tests for proper system message ordering.
+     * Validates fix for GitHub issue #1295: System messages should be consolidated
+     * at the beginning of the conversation, not scattered throughout.
+     * This is required for:
+     * - OpenAI best practices (prevents instruction drift)
+     * - DeepSeek compatibility (strict message ordering requirements)
+     * - General cross-model reliability
+     */
+    @Nested
+    inner class SystemMessageOrdering {
+
+        @Test
+        fun `system message appears only at the beginning of prompt`() {
+            val duke = Dog("Duke")
+            val fakeChatModel = FakeChatModel(jacksonObjectMapper().writeValueAsString(duke))
+
+            val setup = createChatClientLlmOperations(fakeChatModel)
+            setup.llmOperations.createObject(
+                messages = listOf(UserMessage("Give me a dog named Duke")),
+                interaction = LlmInteraction(
+                    id = InteractionId("system-ordering-test"),
+                    llm = LlmOptions()
+                ),
+                outputClass = Dog::class.java,
+                action = SimpleTestAgent.actions.first(),
+                agentProcess = setup.mockAgentProcess,
+            )
+
+            assertEquals(1, fakeChatModel.promptsPassed.size)
+            val prompt = fakeChatModel.promptsPassed[0]
+            val messages = prompt.instructions
+
+            // Count system messages
+            val systemMessages = messages.filterIsInstance<org.springframework.ai.chat.messages.SystemMessage>()
+            assertTrue(
+                systemMessages.size <= 1,
+                "Should have at most one system message, but found ${systemMessages.size}"
+            )
+
+            // If there's a system message, it should be first
+            if (systemMessages.isNotEmpty()) {
+                assertTrue(
+                    messages.first() is org.springframework.ai.chat.messages.SystemMessage,
+                    "System message should be at the beginning of the prompt"
+                )
+            }
+        }
+
+        @Test
+        fun `schema format is included in system message not appended after`() {
+            val duke = Dog("Duke")
+            val fakeChatModel = FakeChatModel(jacksonObjectMapper().writeValueAsString(duke))
+
+            val setup = createChatClientLlmOperations(fakeChatModel)
+            setup.llmOperations.createObject(
+                messages = listOf(UserMessage("Give me a dog")),
+                interaction = LlmInteraction(
+                    id = InteractionId("schema-in-system-test"),
+                    llm = LlmOptions()
+                ),
+                outputClass = Dog::class.java,
+                action = SimpleTestAgent.actions.first(),
+                agentProcess = setup.mockAgentProcess,
+            )
+
+            val prompt = fakeChatModel.promptsPassed[0]
+            val messages = prompt.instructions
+
+            // The schema format (containing $schema) should be in the first system message
+            val systemMessages = messages.filterIsInstance<org.springframework.ai.chat.messages.SystemMessage>()
+            assertTrue(systemMessages.isNotEmpty(), "Should have a system message")
+
+            val firstSystemMessage = systemMessages.first()
+            assertTrue(
+                firstSystemMessage.text.contains("\$schema") || firstSystemMessage.text.contains("\"type\""),
+                "Schema format should be in the system message"
+            )
+
+            // Verify no system message appears after user messages
+            val userMessageIndex = messages.indexOfFirst { it is org.springframework.ai.chat.messages.UserMessage }
+            if (userMessageIndex >= 0) {
+                val messagesAfterUser = messages.drop(userMessageIndex + 1)
+                val systemMessagesAfterUser = messagesAfterUser.filterIsInstance<org.springframework.ai.chat.messages.SystemMessage>()
+                assertTrue(
+                    systemMessagesAfterUser.isEmpty(),
+                    "No system messages should appear after user messages, but found ${systemMessagesAfterUser.size}"
+                )
+            }
+        }
+
+        @Test
+        fun `createObjectIfPossible consolidates system messages`() {
+            val duke = Dog("Duke")
+            val fakeChatModel = FakeChatModel(
+                jacksonObjectMapper().writeValueAsString(
+                    MaybeReturn(success = duke)
+                )
+            )
+
+            val setup = createChatClientLlmOperations(fakeChatModel)
+            setup.llmOperations.createObjectIfPossible(
+                messages = listOf(UserMessage("Give me a dog if possible")),
+                interaction = LlmInteraction(
+                    id = InteractionId("maybe-return-system-test"),
+                    llm = LlmOptions()
+                ),
+                outputClass = Dog::class.java,
+                action = SimpleTestAgent.actions.first(),
+                agentProcess = setup.mockAgentProcess,
+            )
+
+            val prompt = fakeChatModel.promptsPassed[0]
+            val messages = prompt.instructions
+
+            // Count system messages - should be exactly one at the start
+            val systemMessages = messages.filterIsInstance<org.springframework.ai.chat.messages.SystemMessage>()
+            assertTrue(
+                systemMessages.size <= 1,
+                "createObjectIfPossible should consolidate to at most one system message, found ${systemMessages.size}"
+            )
+
+            // System message should be first
+            if (systemMessages.isNotEmpty()) {
+                assertTrue(
+                    messages.first() is org.springframework.ai.chat.messages.SystemMessage,
+                    "System message should be at the beginning"
+                )
+            }
+
+            // No system messages after user messages
+            val firstNonSystemIndex = messages.indexOfFirst { it !is org.springframework.ai.chat.messages.SystemMessage }
+            if (firstNonSystemIndex >= 0) {
+                val messagesAfterFirst = messages.drop(firstNonSystemIndex)
+                val lateSystemMessages = messagesAfterFirst.filterIsInstance<org.springframework.ai.chat.messages.SystemMessage>()
+                assertTrue(
+                    lateSystemMessages.isEmpty(),
+                    "No system messages should appear after non-system messages"
+                )
+            }
+        }
+
+        @Test
+        fun `prompt contributions and schema are merged into single system message`() {
+            val duke = Dog("Duke")
+            val fakeChatModel = FakeChatModel(jacksonObjectMapper().writeValueAsString(duke))
+
+            val setup = createChatClientLlmOperations(fakeChatModel)
+            setup.llmOperations.createObject(
+                messages = listOf(
+                    SystemMessage("You are a helpful assistant that creates dogs."),
+                    UserMessage("Give me a dog named Duke"),
+                ),
+                interaction = LlmInteraction(
+                    id = InteractionId("merged-system-test"),
+                    llm = LlmOptions()
+                ),
+                outputClass = Dog::class.java,
+                action = SimpleTestAgent.actions.first(),
+                agentProcess = setup.mockAgentProcess,
+            )
+
+            val prompt = fakeChatModel.promptsPassed[0]
+            val messages = prompt.instructions
+
+            // Should have exactly one system message
+            val systemMessages = messages.filterIsInstance<org.springframework.ai.chat.messages.SystemMessage>()
+
+            // The single system message should contain the schema
+            if (systemMessages.isNotEmpty()) {
+                val systemContent = systemMessages.first().text
+                assertTrue(
+                    systemContent.contains("\$schema") || systemContent.contains("\"type\""),
+                    "System message should contain schema format"
+                )
+            }
+
+            // Verify proper ordering: system first, then user/assistant
+            var foundNonSystem = false
+            for (message in messages) {
+                if (message !is org.springframework.ai.chat.messages.SystemMessage) {
+                    foundNonSystem = true
+                } else if (foundNonSystem) {
+                    fail<Unit>("System message found after non-system message - violates message ordering")
+                }
+            }
         }
     }
 

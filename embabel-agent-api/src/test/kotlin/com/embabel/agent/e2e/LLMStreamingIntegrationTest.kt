@@ -19,16 +19,17 @@ import com.embabel.agent.AgentApiTestApplication
 import com.embabel.agent.api.annotation.LlmTool
 import com.embabel.agent.api.common.Ai
 import com.embabel.agent.api.common.autonomy.Autonomy
-import com.embabel.agent.api.common.streaming.StreamingPromptRunnerOperations
+import com.embabel.agent.api.common.streaming.StreamingPromptRunner
 import com.embabel.agent.api.common.streaming.asStreaming
 import com.embabel.agent.api.common.support.streaming.StreamingCapabilityDetector
 import com.embabel.agent.core.AgentPlatform
 import com.embabel.agent.spi.LlmOperations
+import com.embabel.agent.spi.LlmService
 import com.embabel.agent.spi.ToolDecorator
 import com.embabel.agent.spi.support.FakeChatModel
 import com.embabel.agent.spi.support.springai.ChatClientLlmOperations
+import com.embabel.agent.spi.support.springai.SpringAiLlmService
 import com.embabel.common.ai.model.DefaultOptionsConverter
-import com.embabel.common.ai.model.Llm
 import com.embabel.common.ai.model.ModelProvider
 import com.embabel.common.ai.model.PricingModel
 import com.embabel.common.textio.template.TemplateRenderer
@@ -94,10 +95,10 @@ class StreamingTestConfig {
     }
 
     @Bean
-    fun nonStreamingTestLlm(): Llm {
-        return Llm(
+    fun nonStreamingTestLlm(): LlmService<*> {
+        return SpringAiLlmService(
             name = NON_STREAMING_MODEL_NAME,
-            model = FakeChatModel(NON_STREAMING_RESPONSE),
+            chatModel = FakeChatModel(NON_STREAMING_RESPONSE),
             pricingModel = PricingModel.usdPer1MTokens(LOW_COST, LOW_COST),
             provider = TEST_PROVIDER,
             optionsConverter = DefaultOptionsConverter,
@@ -105,10 +106,10 @@ class StreamingTestConfig {
     }
 
     @Bean
-    fun streamingTestLlm(): Llm {
-        return Llm(
+    fun streamingTestLlm(): LlmService<*> {
+        return SpringAiLlmService(
             name = STREAMING_MODEL_NAME,
-            model = FakeStreamingChatModel(STREAMING_RESPONSE),
+            chatModel = FakeStreamingChatModel(STREAMING_RESPONSE),
             pricingModel = PricingModel.usdPer1MTokens(HIGHER_COST, HIGHER_COST),
             provider = TEST_PROVIDER,
             optionsConverter = DefaultOptionsConverter,
@@ -193,11 +194,11 @@ class LLMStreamingIntegrationTest(
 
         assertTrue(runner.supportsStreaming(), "Streaming model should support streaming")
 
-        val streamingOperations = runner.stream()
+        val streamingOperations = runner.streaming()
         assertNotNull(streamingOperations, "stream() should return StreamingOperations")
 
         when (streamingOperations) {
-            is StreamingPromptRunnerOperations -> {
+            is StreamingPromptRunner.Streaming -> {
                 val results = streamingOperations
                     .withPrompt("Test streaming")
                     .createObjectStream(SimpleItem::class.java)
@@ -206,7 +207,7 @@ class LLMStreamingIntegrationTest(
             }
 
             else -> {
-                assertTrue(false, "StreamingOperations should be castable to StreamingPromptRunnerOperations")
+                assertTrue(false, "StreamingOperations should be castable to StreamingPromptRunner.Streaming")
             }
         }
     }
@@ -223,7 +224,7 @@ class LLMStreamingIntegrationTest(
         val runner = ai.withLlmByRole("cheapest")
 
         val exception = assertThrows(UnsupportedOperationException::class.java) {
-            runner.stream()
+            runner.streaming()
         }
 
         assertTrue(
@@ -244,11 +245,11 @@ class LLMStreamingIntegrationTest(
         assertTrue(runner.supportsStreaming(), "Runner with tools should support streaming")
 
         // Verify streaming works with tools registered
-        val streamingOperations = runner.stream()
+        val streamingOperations = runner.streaming()
         assertNotNull(streamingOperations, "stream() should work with tools present")
 
         when (streamingOperations) {
-            is StreamingPromptRunnerOperations -> {
+            is StreamingPromptRunner.Streaming -> {
                 val results = streamingOperations
                     .withPrompt("Test streaming")
                     .createObjectStream(SimpleItem::class.java)
@@ -260,7 +261,7 @@ class LLMStreamingIntegrationTest(
             }
 
             else -> {
-                fail("StreamingOperations should be castable to StreamingPromptRunnerOperations")
+                fail("StreamingOperations should be castable to StreamingPromptRunner.Streaming")
             }
         }
 

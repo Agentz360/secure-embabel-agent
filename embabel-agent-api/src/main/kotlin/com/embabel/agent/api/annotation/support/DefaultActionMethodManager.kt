@@ -22,13 +22,19 @@ import com.embabel.agent.api.common.ActionContext
 import com.embabel.agent.api.common.OperationContext
 import com.embabel.agent.api.common.TransformationActionContext
 import com.embabel.agent.api.common.support.MultiTransformationAction
-import com.embabel.agent.core.*
+import com.embabel.agent.api.tool.Tool
+import com.embabel.agent.core.Action
+import com.embabel.agent.core.Blackboard
+import com.embabel.agent.core.DataDictionary
+import com.embabel.agent.core.DomainType
+import com.embabel.agent.core.IoBinding
+import com.embabel.agent.core.ReplanRequestedException
 import com.embabel.agent.core.support.BlackboardWorldState
 import com.embabel.common.core.types.ZeroToOne
 import com.embabel.plan.CostComputation
 import com.embabel.plan.WorldState
 import org.slf4j.LoggerFactory
-import org.springframework.ai.tool.ToolCallback
+import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.core.KotlinDetector
 import org.springframework.stereotype.Component
 import org.springframework.util.ReflectionUtils
@@ -48,14 +54,34 @@ import kotlin.reflect.jvm.kotlinFunction
 @Component
 internal class DefaultActionMethodManager(
     val nameGenerator: MethodDefinedOperationNameGenerator = MethodDefinedOperationNameGenerator(),
-    val actionQosProvider: ActionQosProvider = DefaultActionQosProvider(),
-    override val argumentResolvers: List<ActionMethodArgumentResolver> = listOf(
-        ProcessContextArgumentResolver(),
-        OperationContextArgumentResolver(),
-        AiArgumentResolver(),
-        BlackboardArgumentResolver(),
-    ),
+    override val actionQosProvider: ActionQosProvider = DefaultActionQosProvider(),
+    @Autowired(required = false) contextProvider: ContextProvider? = null,
+    override val argumentResolvers: List<ActionMethodArgumentResolver> = buildArgumentResolvers(contextProvider),
 ) : ActionMethodManager {
+
+    companion object {
+        /**
+         * Build the list of argument resolvers, optionally including
+         * [ProvidedArgumentResolver] if a [ContextProvider] is available.
+         */
+        internal fun buildArgumentResolvers(
+            contextProvider: ContextProvider?,
+        ): List<ActionMethodArgumentResolver> {
+            val resolvers = mutableListOf<ActionMethodArgumentResolver>(
+                ProcessContextArgumentResolver(),
+                OperationContextArgumentResolver(),
+                AiArgumentResolver(),
+            )
+            // Add ProvidedArgumentResolver before BlackboardArgumentResolver
+            // so @Provided takes precedence over blackboard lookup
+            if (contextProvider != null) {
+                resolvers += ProvidedArgumentResolver(contextProvider)
+            }
+            // BlackboardArgumentResolver should be last as a fallback
+            resolvers += BlackboardArgumentResolver()
+            return resolvers
+        }
+    }
 
     private val logger = LoggerFactory.getLogger(DefaultActionMethodManager::class.java)
 
@@ -63,7 +89,7 @@ internal class DefaultActionMethodManager(
     override fun createAction(
         method: Method,
         instance: Any,
-        toolCallbacksOnInstance: List<ToolCallback>,
+        toolsOnInstance: List<Tool>,
         costMethods: Map<String, CostMethodInfo>,
     ): Action {
         requireNonAmbiguousParameters(method)
@@ -103,7 +129,7 @@ internal class DefaultActionMethodManager(
             inputClasses = inputClasses,
             outputClass = method.returnType,
             outputVarName = actionAnnotation.outputBinding,
-            toolGroups = computeToolGroups(actionAnnotation),
+            toolGroups = emptySet(),
             qos = actionQosProvider.provideActionQos(method, instance),
         ) { context ->
             invokeActionMethod(
@@ -343,6 +369,11 @@ internal class DefaultActionMethodManager(
         methodName: String,
         t: Throwable,
     ) {
+        // ReplanRequestedException is a control flow signal, not an error
+        // Throw it but don't log it
+        if (t is ReplanRequestedException) {
+            throw t
+        }
         logger.warn(
             "Error invoking action method {}.{}: {}",
             instanceName,
@@ -359,5 +390,6 @@ internal class DefaultActionMethodManager(
  * at planning time without access to full agent metadata.
  */
 private object EmptyDataDictionary : DataDictionary {
+    override val name: String = "EmptyDataDictionary"
     override val domainTypes: Collection<DomainType> = emptyList()
 }

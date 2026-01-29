@@ -16,10 +16,21 @@
 package com.embabel.agent.rag.tools
 
 import com.embabel.agent.api.common.LlmReference
+import com.embabel.agent.api.tool.MatryoshkaTool
+import com.embabel.agent.api.tool.Tool
+import com.embabel.agent.spi.support.DelegatingTool
+import com.embabel.agent.rag.filter.EntityFilter
 import com.embabel.agent.rag.filter.PropertyFilter
 import com.embabel.agent.rag.model.Chunk
 import com.embabel.agent.rag.model.Retrievable
-import com.embabel.agent.rag.service.*
+import com.embabel.agent.rag.service.FinderOperations
+import com.embabel.agent.rag.service.RegexSearchOperations
+import com.embabel.agent.rag.service.ResultExpander
+import com.embabel.agent.rag.service.RetrievableResultsFormatter
+import com.embabel.agent.rag.service.SearchOperations
+import com.embabel.agent.rag.service.SimpleRetrievableResultsFormatter
+import com.embabel.agent.rag.service.TextSearch
+import com.embabel.agent.rag.service.VectorSearch
 import com.embabel.common.ai.prompt.PromptContributor
 import com.embabel.common.core.types.SimilarityResult
 import com.embabel.common.core.types.Timed
@@ -69,7 +80,7 @@ fun interface ResultsListener {
  * @param metadataFilter optional filter applied to [com.embabel.agent.rag.model.Datum.metadata].
  * Useful for multi-tenant scenarios where searches should be scoped to a specific owner.
  * The filter is applied transparently - the LLM does not see or control it.
- * @param propertyFilter optional filter applied to object properties
+ * @param entityFilter optional filter applied to object properties
  * (e.g., [com.embabel.agent.rag.model.NamedEntityData.properties] or typed entity fields).
  * The filter is applied transparently - the LLM does not see or control it.
  */
@@ -84,32 +95,32 @@ data class ToolishRag @JvmOverloads constructor(
     val hints: List<PromptContributor> = listOf(),
     val listener: ResultsListener? = null,
     val metadataFilter: PropertyFilter? = null,
-    val propertyFilter: PropertyFilter? = null,
-) : LlmReference {
+    val entityFilter: EntityFilter? = null,
+) : LlmReference, DelegatingTool {
 
     private val logger = LoggerFactory.getLogger(javaClass)
 
     private val validHints = hints.toMutableList()
 
-    private val toolInstances: List<Any> = run {
+    private val toolObjects: List<Any> = run {
         buildList {
             // If the search operations already implement SearchTools, use them directly
             if (searchOperations is SearchTools) {
-                logger.info("Adding existing SearchTools to ToolishRag tools {}", name)
+                logger.info("Adding existing SearchTools to ToolishRag '{}'", name)
                 add(searchOperations)
             }
             // This can confuse guide. Let's skip it for now.
 //            if (searchOperations is TypeRetrievalOperations) {
-//                logger.info("Adding TypeRetrievalTools to ToolishRag tools {}", name)
+//                logger.info("Adding TypeRetrievalTools to ToolishRag '{}'", name)
 //                add(TypeRetrievalTools(searchOperations))
 //            }
             if (searchOperations is FinderOperations) {
-                logger.info("Adding FinderTools to ToolishRag tools {}", name)
+                logger.info("Adding FinderTools to ToolishRag '{}'", name)
                 add(FinderTools(searchOperations))
             }
             if (searchOperations is VectorSearch) {
-                logger.info("Adding VectorSearchTools to ToolishRag tools {}", name)
-                add(VectorSearchTools(searchOperations, vectorSearchFor, metadataFilter, propertyFilter, listener))
+                logger.info("Adding VectorSearchTools to ToolishRag '{}'", name)
+                add(VectorSearchTools(searchOperations, vectorSearchFor, metadataFilter, entityFilter, listener))
             } else {
                 if (hints.any { it is TryHyDE }) {
                     logger.warn(
@@ -120,16 +131,16 @@ data class ToolishRag @JvmOverloads constructor(
                 }
             }
             if (searchOperations is TextSearch) {
-                logger.info("Adding TextSearchTools to ToolishRag tools {}", name)
-                add(TextSearchTools(searchOperations, textSearchFor, metadataFilter, propertyFilter, listener))
+                logger.info("Adding TextSearchTools to ToolishRag '{}'", name)
+                add(TextSearchTools(searchOperations, textSearchFor, metadataFilter, entityFilter, listener))
             }
             if (searchOperations is ResultExpander) {
-                logger.info("Adding ResultExpanderTools to ToolishRag tools {}", name)
+                logger.info("Adding ResultExpanderTools to ToolishRag '{}'", name)
                 add(ResultExpanderTools(searchOperations))
             }
             if (searchOperations is RegexSearchOperations) {
-                logger.info("Adding RegexSearchTools to ToolishRag tools {}", name)
-                add(RegexSearchTools(searchOperations, metadataFilter, propertyFilter, listener))
+                logger.info("Adding RegexSearchTools to ToolishRag '{}'", name)
+                add(RegexSearchTools(searchOperations, metadataFilter, entityFilter, listener))
             }
         }
     }
@@ -179,14 +190,32 @@ data class ToolishRag @JvmOverloads constructor(
         copy(metadataFilter = filter)
 
     /**
-     * Set a property filter to apply to all searches.
-     * Filters on object properties (e.g., entity fields) rather than metadata.
+     * Set an entity filter to apply to all searches.
+     * Filters on object properties (e.g., entity fields) and labels rather than metadata.
      * The filter is applied transparently - the LLM does not see or control it.
      */
-    fun withPropertyFilter(filter: PropertyFilter): ToolishRag =
-        copy(propertyFilter = filter)
+    fun withEntityFilter(filter: EntityFilter): ToolishRag =
+        copy(entityFilter = filter)
 
-    override fun toolInstances() = toolInstances
+    // LlmReference: returns flat list of inner tools (backward compatible)
+    override fun tools(): List<Tool> = toolObjects.flatMap { Tool.fromInstance(it) }
+
+    // Tool interface implementation via lazy MatryoshkaTool
+    // When used directly as a Tool, wraps all inner tools in a MatryoshkaTool
+    // Implements DelegatingTool so MatryoshkaToolInjectionStrategy can unwrap it
+    override val delegate: Tool by lazy {
+        MatryoshkaTool.of(
+            name = name,
+            description = description,
+            innerTools = tools(),
+        )
+    }
+
+    override val definition: Tool.Definition
+        get() = delegate.definition
+
+    override fun call(input: String): Tool.Result =
+        delegate.call(input)
 
     override fun notes() = """
         ${

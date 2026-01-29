@@ -17,6 +17,7 @@ package com.embabel.agent.domain.library.code
 
 import com.embabel.agent.api.annotation.LlmTool
 import com.embabel.agent.api.common.LlmReference
+import com.embabel.agent.api.tool.Tool
 import com.embabel.agent.tools.file.*
 import com.embabel.coding.tools.ci.BuildOptions
 import com.embabel.coding.tools.ci.BuildResult
@@ -55,11 +56,11 @@ open class SoftwareProject @JvmOverloads constructor(
             error("Directory '$root' does not exist")
         }
         loggerFor<SoftwareProject>().info(
-            "Software project tools: ${
-                toolCallbacks.map { it.toolDefinition.name() }.sorted()
-            }"
+            "Software project tools: ${tools().map { it.definition.name }.sorted()}"
         )
     }
+
+    override fun tools(): List<Tool> = Tool.fromInstance(this)
 
     override val name
         get() = root.substringAfterLast('/')

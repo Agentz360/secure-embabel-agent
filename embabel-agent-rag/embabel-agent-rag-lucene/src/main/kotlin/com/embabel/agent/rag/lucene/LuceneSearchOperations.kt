@@ -16,14 +16,24 @@
 package com.embabel.agent.rag.lucene
 
 import com.embabel.agent.api.common.primitive.KeywordExtractor
+import com.embabel.agent.rag.service.support.VectorMath
 import com.embabel.agent.rag.ingestion.ChunkTransformer
 import com.embabel.agent.rag.ingestion.ContentChunker
 import com.embabel.agent.rag.ingestion.ContentChunker.Companion.CONTAINER_SECTION_ID
 import com.embabel.agent.rag.ingestion.ContentChunker.Companion.SEQUENCE_NUMBER
 import com.embabel.agent.rag.ingestion.RetrievableEnhancer
-import com.embabel.agent.rag.model.*
+import com.embabel.agent.rag.model.Chunk
+import com.embabel.agent.rag.model.ContentElement
+import com.embabel.agent.rag.model.ContentRoot
+import com.embabel.agent.rag.model.DefaultMaterializedContainerSection
+import com.embabel.agent.rag.model.HierarchicalContentElement
+import com.embabel.agent.rag.model.LeafSection
+import com.embabel.agent.rag.model.MaterializedDocument
+import com.embabel.agent.rag.model.NavigableContainerSection
+import com.embabel.agent.rag.model.NavigableDocument
+import com.embabel.agent.rag.model.NavigableSection
+import com.embabel.agent.rag.model.Retrievable
 import com.embabel.agent.rag.service.CoreSearchOperations
-import com.embabel.agent.rag.service.FinderOperations
 import com.embabel.agent.rag.service.RagRequest
 import com.embabel.agent.rag.service.ResultExpander
 import com.embabel.agent.rag.service.support.FunctionRagFacet
@@ -40,8 +50,17 @@ import com.embabel.common.core.types.TextSimilaritySearchRequest
 import com.embabel.common.util.indent
 import com.embabel.common.util.trim
 import org.apache.lucene.analysis.standard.StandardAnalyzer
-import org.apache.lucene.document.*
-import org.apache.lucene.index.*
+import org.apache.lucene.document.Document
+import org.apache.lucene.document.Field
+import org.apache.lucene.document.KnnFloatVectorField
+import org.apache.lucene.document.StoredField
+import org.apache.lucene.document.StringField
+import org.apache.lucene.document.TextField
+import org.apache.lucene.index.DirectoryReader
+import org.apache.lucene.index.IndexWriter
+import org.apache.lucene.index.IndexWriterConfig
+import org.apache.lucene.index.MultiBits
+import org.apache.lucene.index.VectorSimilarityFunction
 import org.apache.lucene.queryparser.classic.QueryParser
 import org.apache.lucene.search.IndexSearcher
 import org.apache.lucene.search.KnnFloatVectorQuery
@@ -81,7 +100,6 @@ class LuceneSearchOperations @JvmOverloads constructor(
     HasInfoString,
     Closeable,
     CoreSearchOperations,
-    FinderOperations,
     ResultExpander {
 
     private val analyzer = StandardAnalyzer()
@@ -145,28 +163,6 @@ class LuceneSearchOperations @JvmOverloads constructor(
         return type == Chunk::class.java.simpleName
     }
 
-    override fun <T> findById(
-        id: String,
-        clazz: Class<T>,
-    ): T? {
-        if (!clazz.isAssignableFrom(Chunk::class.java)) {
-            logger.warn("findById only supports Chunk class in LuceneSearchOperations, requested: {}", clazz.name)
-            return null
-        }
-        return findAllChunksById(listOf(id)).firstOrNull() as T?
-    }
-
-    override fun <T : Retrievable> findById(
-        id: String,
-        type: String,
-    ): T? {
-        if (type != Chunk::class.java.simpleName) {
-            logger.warn("findById only supports Chunk class in LuceneSearchOperations, requested: {}", type)
-            return null
-        }
-        return findAllChunksById(listOf(id)).firstOrNull() as T?
-    }
-
     override fun facets(): List<RagFacet<out Retrievable>> {
         return listOf(
             FunctionRagFacet(
@@ -222,7 +218,7 @@ class LuceneSearchOperations @JvmOverloads constructor(
         // No op here
     }
 
-    fun <T : ContentElement> findAll(clazz: Class<T>): List<T> {
+    override fun <T : ContentElement> findAll(clazz: Class<T>): List<T> {
         ensureChunksLoaded()
         logger.debug("Retrieving all content elements from storage")
         val allChunks = contentElementStorage.values

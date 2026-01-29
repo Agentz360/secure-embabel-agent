@@ -175,12 +175,12 @@ public class MyToolGroupsConfiguration {
 
 This approach leverages Spring's dependency injection to provide tool groups with the services and resources they need, while maintaining clean separation of concerns between tool configuration and agent logic.
 
-===== Tool Usage in Action Methods
+===== Using Tools in Action Methods
 
-The `toolGroups` parameter on `@Action` methods specifies which tool groups are required for that action to execute.
-The framework automatically provides these tools to the LLM when the action runs.
+Tools are specified on the `PromptRunner` when making LLM calls.
+This gives you fine-grained control over which tools are available for each specific prompt.
 
-Here's an example from the `StarNewsFinder` agent that demonstrates web tool usage:
+Here's an example from the `StarNewsFinder` agent that demonstrates web tool usage within an action:
 
 [tabs]
 ====
@@ -188,8 +188,7 @@ Java::
 +
 [source,java]
 ----
-// toolGroups specifies tools that are required for this action to run
-@Action(toolGroups = {CoreToolGroups.WEB})
+@Action
 public RelevantNewsStories findNewsStories(
         StarPerson person, Horoscope horoscope, OperationContext context) {
     var prompt = """
@@ -204,7 +203,10 @@ public RelevantNewsStories findNewsStories(
             """.formatted(
             person.name(), person.sign(), horoscope.summary(), storyCount);
 
-    return context.ai().withDefaultLlm().createObject(prompt, RelevantNewsStories.class);
+    // Tools are specified on the PromptRunner
+    return context.ai().withDefaultLlm()
+        .withToolGroup(CoreToolGroups.WEB)  // Add web search tools
+        .createObject(prompt, RelevantNewsStories.class);
 }
 ----
 
@@ -212,48 +214,43 @@ Kotlin::
 +
 [source,kotlin]
 ----
-// toolGroups specifies tools that are required for this action to run
-@Action(toolGroups = [CoreToolGroups.WEB, CoreToolGroups.BROWSER_AUTOMATION])
+@Action
 internal fun findNewsStories(
     person: StarPerson,
     horoscope: Horoscope,
     context: OperationContext,
 ): RelevantNewsStories =
-    context.ai().withDefaultLlm() createObject (
-        """
-        ${person.name} is an astrology believer with the sign ${person.sign}.
-        Their horoscope for today is:
-            <horoscope>${horoscope.summary}</horoscope>
-        Given this, use web tools and generate search queries
-        to find $storyCount relevant news stories summarize them in a few sentences.
-        Include the URL for each story.
-        Do not look for another horoscope reading or return results directly about astrology;
-        find stories relevant to the reading above.
-        """.trimIndent()
-    )
+    context.ai().withDefaultLlm()
+        .withToolGroup(CoreToolGroups.WEB)  // Add web search tools
+        .withToolGroup(CoreToolGroups.BROWSER_AUTOMATION)  // Add browser tools
+        .createObject(
+            """
+            ${person.name} is an astrology believer with the sign ${person.sign}.
+            Their horoscope for today is:
+                <horoscope>${horoscope.summary}</horoscope>
+            Given this, use web tools and generate search queries
+            to find $storyCount relevant news stories summarize them in a few sentences.
+            Include the URL for each story.
+            Do not look for another horoscope reading or return results directly about astrology;
+            find stories relevant to the reading above.
+            """.trimIndent()
+        )
 ----
 ====
 
 ===== Key Tool Usage Patterns
 
-**Tool Group Declaration:**
-The `toolGroups` parameter on `@Action` methods explicitly declares which tool groups the action needs.
-This ensures the LLM has access to the appropriate tools when executing that specific action.
+**PromptRunner Tool Methods:**
+Tools are added to the `PromptRunner` fluent API using methods like `withToolGroup()`, `withTools()`, and `withToolObject()`.
 
 **Multiple Tool Groups:**
-Actions can specify multiple tool groups (e.g., `[CoreToolGroups.WEB, CoreToolGroups.BROWSER_AUTOMATION]`) when they need different types of capabilities.
-
-**Automatic Tool Provisioning:**
-The framework automatically makes the specified tools available to the LLM during the action execution.
-Developers don't need to manually manage tool availability - they simply declare what's needed.
+Actions can add multiple tool groups by chaining `withToolGroup()` calls when they need different types of capabilities.
 
 **Tool-Aware Prompts:**
 Prompts should explicitly instruct the LLM to use the available tools.
 For example, "use web tools and generate search queries" clearly directs the LLM to utilize the web search capabilities.
 
-===== Using Tools at PromptRunner Level
-
-Instead of declaring tools at the action level, you can also specify tools directly on the `PromptRunner` for more granular control:
+===== Additional PromptRunner Examples
 
 [source,kotlin]
 ----
@@ -337,13 +334,13 @@ Tool greetTool = Tool.create(
     (input) -> Tool.Result.text("Hello!")
 );
 
-// Tool with parameters
+// Tool with parameters (using factory methods)
 Tool addTool = Tool.create(
     "add",
     "Adds two numbers together",
     Tool.InputSchema.of(
-        new Tool.Parameter("a", Tool.ParameterType.INTEGER, "First number", true, null),
-        new Tool.Parameter("b", Tool.ParameterType.INTEGER, "Second number", true, null)
+        Tool.Parameter.integer("a", "First number"),
+        Tool.Parameter.integer("b", "Second number")
     ),
     (input) -> {
         // Parse input JSON and compute result
@@ -372,13 +369,13 @@ val greetTool = Tool.of(
     Tool.Result.text("Hello!")
 }
 
-// Tool with parameters
+// Tool with parameters (using factory methods)
 val addTool = Tool.of(
     name = "add",
     description = "Adds two numbers together",
     inputSchema = Tool.InputSchema.of(
-        Tool.Parameter("a", Tool.ParameterType.INTEGER, "First number", true, null),
-        Tool.Parameter("b", Tool.ParameterType.INTEGER, "Second number", true, null)
+        Tool.Parameter.integer("a", "First number"),
+        Tool.Parameter.integer("b", "Second number")
     )
 ) { input ->
     // Parse input JSON and compute result
@@ -395,6 +392,16 @@ val directTool = Tool.of(
 }
 ----
 ====
+
+The `Tool.Parameter` class provides factory methods for common parameter types:
+
+- `Tool.Parameter.string(name, description)` - String parameter
+- `Tool.Parameter.string(name, description, required)` - String with optional flag
+- `Tool.Parameter.string(name, description, required, enumValues)` - String with allowed values
+- `Tool.Parameter.integer(name, description)` - Integer parameter
+- `Tool.Parameter.double(name, description)` - Floating-point parameter
+
+All factory methods default to `required = true`.
 
 ===== Creating Tools from Annotated Methods
 
@@ -552,6 +559,114 @@ Tool.Result.withArtifact("Generated report", reportBytes)
 // Error result
 Tool.Result.error("Failed to process request", exception)
 ----
+
+===== Modifying Tool Descriptions
+
+Tools provide `withDescription()` and `withNote()` methods to create copies with modified descriptions.
+This is useful when you need to customize a tool's description for a specific context without modifying the original tool.
+
+**withDescription(newDescription)**
+
+Creates a new tool with a completely replaced description:
+
+[tabs]
+====
+Java::
++
+[source,java]
+----
+// Replace the entire description
+Tool customTool = originalTool.withDescription("Custom description for this context");
+
+// The original tool is unchanged
+System.out.println(originalTool.getDefinition().getDescription()); // original description
+System.out.println(customTool.getDefinition().getDescription());   // Custom description for this context
+----
+
+Kotlin::
++
+[source,kotlin]
+----
+// Replace the entire description
+val customTool = originalTool.withDescription("Custom description for this context")
+
+// The original tool is unchanged
+println(originalTool.definition.description) // original description
+println(customTool.definition.description)   // Custom description for this context
+----
+====
+
+**withNote(note)**
+
+Creates a new tool with an appended note to the existing description:
+
+[tabs]
+====
+Java::
++
+[source,java]
+----
+// Add a note to the existing description
+Tool annotatedTool = originalTool.withNote("Use this when querying large datasets");
+
+// Result: "Original description. Use this when querying large datasets"
+System.out.println(annotatedTool.getDefinition().getDescription());
+----
+
+Kotlin::
++
+[source,kotlin]
+----
+// Add a note to the existing description
+val annotatedTool = originalTool.withNote("Use this when querying large datasets")
+
+// Result: "Original description. Use this when querying large datasets"
+println(annotatedTool.definition.description)
+----
+====
+
+Both methods preserve all other tool properties (name, input schema, metadata, functionality):
+
+[tabs]
+====
+Java::
++
+[source,java]
+----
+Tool original = Tool.create("calculator", "Performs calculations",
+    Tool.InputSchema.of(Tool.Parameter.integer("x", "Number")),
+    input -> Tool.Result.text("42"));
+
+// Create a customized version
+Tool customized = original
+    .withDescription("Specialized math tool")
+    .withNote("Optimized for financial calculations");
+
+// Name and functionality unchanged
+assert customized.getDefinition().getName().equals("calculator");
+assert customized.call("{}").text().equals("42");
+----
+
+Kotlin::
++
+[source,kotlin]
+----
+val original = Tool.of(
+    name = "calculator",
+    description = "Performs calculations",
+    inputSchema = Tool.InputSchema.of(Tool.Parameter.integer("x", "Number"))
+) { Tool.Result.text("42") }
+
+// Create a customized version
+val customized = original
+    .withDescription("Specialized math tool")
+    .withNote("Optimized for financial calculations")
+
+// Name and functionality unchanged
+check(customized.definition.name == "calculator")
+check(customized.call("{}").text == "42")
+----
+====
 
 ===== When to Use Each Approach
 
@@ -906,3 +1021,1152 @@ Use `AgenticTool` for simple cases or as a migration stepping stone; graduate to
 
 TIP: For supervisor-style orchestration with typed outputs and full blackboard state management, see <<reference.planners__supervisor-invocation,SupervisorInvocation>>.
 It operates at a higher level than `AgenticTool`, orchestrating `@Action` methods rather than `Tool` instances, and produces typed goal objects with currying support.
+
+[[reference.tools__matryoshka]]
+==== MatryoshkaTool: Progressive Tool Disclosure
+
+[quote,Augustus De Morgan]
+____
+Great fleas have little fleas upon their backs to bite 'em, +
+And little fleas have lesser fleas, and so ad infinitum. +
+And the great fleas themselves, in turn, have greater fleas to go on; +
+While these again have greater still, and greater still, and so on.
+____
+
+A `MatryoshkaTool` is a special tool that presents a high-level description to the LLM and, when invoked, exposes its inner tools.
+Named after Russian nesting dolls, this pattern enables *progressive tool disclosure* - presenting a simplified interface initially, then revealing more granular tools on demand.
+
+===== When to Use MatryoshkaTool
+
+MatryoshkaTool is useful when:
+
+* You have many related tools that might overwhelm the LLM with choices
+* You want to group tools by category (e.g., "database operations", "file operations")
+* You want the LLM to express intent before revealing detailed options
+* You need to reduce token usage for tool descriptions
+
+===== Creating a Simple MatryoshkaTool
+
+The simplest form exposes all inner tools when invoked:
+
+[tabs]
+====
+Java::
++
+[source,java]
+----
+import com.embabel.agent.api.tool.MatryoshkaTool;
+import com.embabel.agent.api.tool.Tool;
+
+// Create inner tools
+Tool queryTool = Tool.create("query_table", "Execute a SQL query",
+    Tool.InputSchema.of(Tool.Parameter.string("sql", "The SQL query to execute")),
+    input -> Tool.Result.text("{\"rows\": 5}")
+);
+
+Tool insertTool = Tool.create("insert_record", "Insert a new record",
+    Tool.InputSchema.of(Tool.Parameter.string("table", "Table name")),
+    input -> Tool.Result.text("{\"id\": 123}")
+);
+
+Tool deleteTool = Tool.create("delete_record", "Delete a record",
+    Tool.InputSchema.of(Tool.Parameter.integer("id", "Record ID to delete")),
+    input -> Tool.Result.text("{\"deleted\": true}")
+);
+
+// Create the MatryoshkaTool facade
+MatryoshkaTool databaseTool = MatryoshkaTool.of(
+    "database_operations",
+    "Use this tool to work with the database. Invoke to see specific operations.",
+    List.of(queryTool, insertTool, deleteTool)
+);
+----
+
+Kotlin::
++
+[source,kotlin]
+----
+import com.embabel.agent.api.tool.MatryoshkaTool
+import com.embabel.agent.api.tool.Tool
+
+// Create inner tools
+val queryTool = Tool.of(
+    name = "query_table",
+    description = "Execute a SQL query",
+    inputSchema = Tool.InputSchema.of(Tool.Parameter.string("sql", "The SQL query to execute"))
+) { input -> Tool.Result.text("""{"rows": 5}""") }
+
+val insertTool = Tool.of(
+    name = "insert_record",
+    description = "Insert a new record",
+    inputSchema = Tool.InputSchema.of(Tool.Parameter.string("table", "Table name"))
+) { input -> Tool.Result.text("""{"id": 123}""") }
+
+val deleteTool = Tool.of(
+    name = "delete_record",
+    description = "Delete a record",
+    inputSchema = Tool.InputSchema.of(Tool.Parameter.integer("id", "Record ID to delete"))
+) { input -> Tool.Result.text("""{"deleted": true}""") }
+
+// Create the MatryoshkaTool facade
+val databaseTool = MatryoshkaTool.of(
+    name = "database_operations",
+    description = "Use this tool to work with the database. Invoke to see specific operations.",
+    innerTools = listOf(queryTool, insertTool, deleteTool)
+)
+----
+====
+
+===== Category-Based Tool Selection
+
+Use `byCategory` to expose different tools based on the category the LLM selects:
+
+[tabs]
+====
+Java::
++
+[source,java]
+----
+import com.embabel.agent.api.tool.MatryoshkaTool;
+import java.util.Map;
+
+// Define tools by category
+Map<String, List<Tool>> toolsByCategory = Map.of(
+    "read", List.of(readFileTool, listDirectoryTool, searchFilesTool),
+    "write", List.of(writeFileTool, deleteFileTool, moveFileTool)
+);
+
+// Create category-based MatryoshkaTool
+MatryoshkaTool fileTool = MatryoshkaTool.byCategory(
+    "file_operations",
+    "File operations. Pass category: 'read' for reading files, 'write' for modifying files.",
+    toolsByCategory
+);
+
+// The tool's schema automatically includes the category as an enum parameter
+// When invoked with {"category": "read"}, only read tools are exposed
+// When invoked with {"category": "write"}, only write tools are exposed
+----
+
+Kotlin::
++
+[source,kotlin]
+----
+import com.embabel.agent.api.tool.MatryoshkaTool
+
+// Define tools by category
+val toolsByCategory = mapOf(
+    "read" to listOf(readFileTool, listDirectoryTool, searchFilesTool),
+    "write" to listOf(writeFileTool, deleteFileTool, moveFileTool)
+)
+
+// Create category-based MatryoshkaTool
+val fileTool = MatryoshkaTool.byCategory(
+    name = "file_operations",
+    description = "File operations. Pass category: 'read' for reading files, 'write' for modifying files.",
+    toolsByCategory = toolsByCategory
+)
+
+// The tool's schema automatically includes the category as an enum parameter
+// When invoked with {"category": "read"}, only read tools are exposed
+// When invoked with {"category": "write"}, only write tools are exposed
+----
+====
+
+===== Custom Selection Logic
+
+For more complex selection logic, use `selectable`:
+
+[tabs]
+====
+Java::
++
+[source,java]
+----
+import com.embabel.agent.api.tool.MatryoshkaTool;
+import com.fasterxml.jackson.databind.ObjectMapper;
+
+List<Tool> allTools = List.of(basicTool, advancedTool, adminTool);
+
+MatryoshkaTool permissionBasedTool = MatryoshkaTool.selectable(
+    "api_operations",
+    "API operations. Pass 'accessLevel': 'basic', 'advanced', or 'admin'.",
+    allTools,
+    Tool.InputSchema.of(
+        Tool.Parameter.string("accessLevel", "Access level for operations",
+            true, List.of("basic", "advanced", "admin"))
+    ),
+    true,  // removeOnInvoke
+    input -> {
+        // Custom selection logic
+        try {
+            ObjectMapper mapper = new ObjectMapper();
+            Map<String, Object> params = mapper.readValue(input, Map.class);
+            String level = (String) params.get("accessLevel");
+            return switch (level) {
+                case "basic" -> List.of(basicTool);
+                case "advanced" -> List.of(basicTool, advancedTool);
+                case "admin" -> allTools;
+                default -> List.of(basicTool);
+            };
+        } catch (Exception e) {
+            return List.of(basicTool);
+        }
+    }
+);
+----
+
+Kotlin::
++
+[source,kotlin]
+----
+import com.embabel.agent.api.tool.MatryoshkaTool
+import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
+
+val allTools = listOf(basicTool, advancedTool, adminTool)
+
+val permissionBasedTool = MatryoshkaTool.selectable(
+    name = "api_operations",
+    description = "API operations. Pass 'accessLevel': 'basic', 'advanced', or 'admin'.",
+    innerTools = allTools,
+    inputSchema = Tool.InputSchema.of(
+        Tool.Parameter.string("accessLevel", "Access level for operations",
+            required = true, enumValues = listOf("basic", "advanced", "admin"))
+    ),
+) { input ->
+    // Custom selection logic
+    val mapper = jacksonObjectMapper()
+    val params = mapper.readValue(input, Map::class.java)
+    when (params["accessLevel"]) {
+        "basic" -> listOf(basicTool)
+        "advanced" -> listOf(basicTool, advancedTool)
+        "admin" -> allTools
+        else -> listOf(basicTool)
+    }
+}
+----
+====
+
+===== Keeping the Facade Available
+
+By default, a MatryoshkaTool is removed after invocation (replaced by its inner tools).
+Set `removeOnInvoke = false` to keep the facade available for re-invocation with different arguments:
+
+[tabs]
+====
+Java::
++
+[source,java]
+----
+// Facade stays available after invocation
+MatryoshkaTool persistentTool = MatryoshkaTool.of(
+    "operations",
+    "Operations. Invoke multiple times with different needs.",
+    allTools,
+    false  // removeOnInvoke = false
+);
+----
+
+Kotlin::
++
+[source,kotlin]
+----
+// Facade stays available after invocation
+val persistentTool = MatryoshkaTool.of(
+    name = "operations",
+    description = "Operations. Invoke multiple times with different needs.",
+    innerTools = allTools,
+    removeOnInvoke = false
+)
+----
+====
+
+===== Enabling MatryoshkaTool in the Tool Loop
+
+MatryoshkaTool is **enabled by default** when using Embabel's tool loop.
+The `ToolInjectionStrategy.DEFAULT` includes `MatryoshkaToolInjectionStrategy`, so no additional configuration is needed.
+
+If you need to combine with custom strategies, use `ChainedToolInjectionStrategy`:
+
+[tabs]
+====
+Java::
++
+[source,java]
+----
+import com.embabel.agent.spi.loop.ChainedToolInjectionStrategy;
+
+// Combine MatryoshkaTool support with custom strategies
+ChainedToolInjectionStrategy combined =
+    ChainedToolInjectionStrategy.withMatryoshka(customStrategy1, customStrategy2);
+----
+
+Kotlin::
++
+[source,kotlin]
+----
+import com.embabel.agent.spi.loop.ChainedToolInjectionStrategy
+
+// Combine MatryoshkaTool support with custom strategies
+val combined = ChainedToolInjectionStrategy.withMatryoshka(customStrategy1, customStrategy2)
+----
+====
+
+===== How MatryoshkaTool Works
+
+1. **Initial state**: The LLM sees only the facade tool (e.g., "database_operations")
+2. **LLM invokes**: The LLM calls the facade with optional arguments
+3. **Strategy evaluates**: `MatryoshkaToolInjectionStrategy` detects the invocation
+4. **Tools replaced**: The facade is removed (if `removeOnInvoke` is true) and inner tools are added
+5. **Continue**: The LLM now sees and can use the specific inner tools
+
+This flow reduces the initial tool set complexity while allowing the LLM to access detailed tools when it needs them.
+
+===== Context Preservation and Usage Notes
+
+When a MatryoshkaTool is expanded, its child tools replace the facade.
+Without context preservation, the LLM would lose important information about _why_ these tools are grouped together.
+
+For example, a "spotify_search" tool containing `vector_search`, `text_search`, and `regex_search` would expand to just three generic search tools - the LLM wouldn't know these are specifically for searching Spotify music data.
+
+Embabel solves this by automatically injecting a **context tool** alongside the child tools.
+This context tool:
+
+* Preserves the parent's description ("Search Spotify for music data")
+* Lists the available child tools
+* Includes optional usage notes (via `childToolUsageNotes`)
+
+The `childToolUsageNotes` parameter provides guidance on when and how to use the child tools.
+This guidance appears **once** in the context tool rather than being duplicated in each child tool's description:
+
+[tabs]
+====
+Java::
++
+[source,java]
+----
+MatryoshkaTool spotifySearch = MatryoshkaTool.of(
+    "spotify_search",
+    "Search Spotify for music data including artists, albums, and tracks.",
+    List.of(vectorSearchTool, textSearchTool, regexSearchTool),
+    true,  // removeOnInvoke
+    "Try vector search first for semantic queries like 'upbeat jazz'. " +
+    "Use text search for exact artist or album names. " +
+    "Use regex search for pattern matching on metadata."
+);
+----
+
+Kotlin::
++
+[source,kotlin]
+----
+val spotifySearch = MatryoshkaTool.of(
+    name = "spotify_search",
+    description = "Search Spotify for music data including artists, albums, and tracks.",
+    innerTools = listOf(vectorSearchTool, textSearchTool, regexSearchTool),
+    childToolUsageNotes = """
+        Try vector search first for semantic queries like 'upbeat jazz'.
+        Use text search for exact artist or album names.
+        Use regex search for pattern matching on metadata.
+    """.trimIndent()
+)
+----
+====
+
+After the LLM invokes `spotify_search`, it will see:
+
+* `vector_search` - the actual search tool
+* `text_search` - the actual search tool
+* `regex_search` - the actual search tool
+* `spotify_search_context` - context tool with description and usage notes
+
+The context tool's description includes the original purpose and available tools.
+When called, it returns full details about each child tool plus the usage notes - providing a single reference point without polluting individual tool descriptions.
+
+===== Annotation-Based MatryoshkaTool
+
+For a more declarative approach, use the `@MatryoshkaTools` class annotation combined with `@LlmTool` method annotations:
+
+[tabs]
+====
+Java::
++
+[source,java]
+----
+import com.embabel.agent.api.annotation.MatryoshkaTools;
+import com.embabel.agent.api.annotation.LlmTool;
+
+@MatryoshkaTools(
+    name = "database_operations",
+    description = "Database operations. Invoke to see specific tools."
+)
+public class DatabaseTools {
+
+    @LlmTool(description = "Execute a SQL query")
+    public QueryResult query(String sql) {
+        // implementation
+    }
+
+    @LlmTool(description = "Insert a record")
+    public InsertResult insert(String table, Map<String, Object> data) {
+        // implementation
+    }
+
+    @LlmTool(description = "Delete a record")
+    public void delete(long id) {
+        // implementation
+    }
+}
+
+// Create the MatryoshkaTool from the annotated class
+MatryoshkaTool tool = MatryoshkaTool.fromInstance(new DatabaseTools());
+----
+
+Kotlin::
++
+[source,kotlin]
+----
+import com.embabel.agent.api.annotation.MatryoshkaTools
+import com.embabel.agent.api.annotation.LlmTool
+
+@MatryoshkaTools(
+    name = "database_operations",
+    description = "Database operations. Invoke to see specific tools."
+)
+class DatabaseTools {
+
+    @LlmTool(description = "Execute a SQL query")
+    fun query(sql: String): QueryResult {
+        // implementation
+    }
+
+    @LlmTool(description = "Insert a record")
+    fun insert(table: String, data: Map<String, Any>): InsertResult {
+        // implementation
+    }
+
+    @LlmTool(description = "Delete a record")
+    fun delete(id: Long) {
+        // implementation
+    }
+}
+
+// Create the MatryoshkaTool from the annotated class
+val tool = MatryoshkaTool.fromInstance(DatabaseTools())
+----
+====
+
+You can also specify `childToolUsageNotes` in the annotation to provide guidance on using the child tools:
+
+[tabs]
+====
+Java::
++
+[source,java]
+----
+@MatryoshkaTools(
+    name = "music_search",
+    description = "Search music database for artists, albums, and tracks",
+    childToolUsageNotes = "Try vector search first for semantic queries. " +
+        "Use text search for exact artist names."
+)
+public class MusicSearchTools {
+
+    @LlmTool(description = "Semantic search using embeddings")
+    public List<Track> vectorSearch(String query) {
+        // implementation
+    }
+
+    @LlmTool(description = "Exact match text search")
+    public List<Track> textSearch(String query) {
+        // implementation
+    }
+}
+----
+
+Kotlin::
++
+[source,kotlin]
+----
+@MatryoshkaTools(
+    name = "music_search",
+    description = "Search music database for artists, albums, and tracks",
+    childToolUsageNotes = "Try vector search first for semantic queries. " +
+        "Use text search for exact artist names."
+)
+class MusicSearchTools {
+
+    @LlmTool(description = "Semantic search using embeddings")
+    fun vectorSearch(query: String): List<Track> {
+        // implementation
+    }
+
+    @LlmTool(description = "Exact match text search")
+    fun textSearch(query: String): List<Track> {
+        // implementation
+    }
+}
+----
+====
+
+===== Category-Based Selection with Annotations
+
+Add `category` to `@LlmTool` annotations to automatically create a category-based MatryoshkaTool:
+
+[tabs]
+====
+Java::
++
+[source,java]
+----
+@MatryoshkaTools(
+    name = "file_operations",
+    description = "File operations. Pass category: 'read' or 'write'."
+)
+public class FileTools {
+
+    @LlmTool(description = "Read file contents", category = "read")
+    public String readFile(String path) {
+        return Files.readString(Path.of(path));
+    }
+
+    @LlmTool(description = "List directory contents", category = "read")
+    public List<String> listDir(String path) {
+        return Files.list(Path.of(path)).map(Path::toString).toList();
+    }
+
+    @LlmTool(description = "Write file contents", category = "write")
+    public void writeFile(String path, String content) {
+        Files.writeString(Path.of(path), content);
+    }
+
+    @LlmTool(description = "Delete a file", category = "write")
+    public void deleteFile(String path) {
+        Files.delete(Path.of(path));
+    }
+}
+
+// Automatically creates category-based selection
+MatryoshkaTool tool = MatryoshkaTool.fromInstance(new FileTools());
+// When invoked with {"category": "read"}, only read tools are exposed
+// When invoked with {"category": "write"}, only write tools are exposed
+----
+
+Kotlin::
++
+[source,kotlin]
+----
+@MatryoshkaTools(
+    name = "file_operations",
+    description = "File operations. Pass category: 'read' or 'write'."
+)
+class FileTools {
+
+    @LlmTool(description = "Read file contents", category = "read")
+    fun readFile(path: String): String = File(path).readText()
+
+    @LlmTool(description = "List directory contents", category = "read")
+    fun listDir(path: String): List<String> = File(path).list()?.toList() ?: emptyList()
+
+    @LlmTool(description = "Write file contents", category = "write")
+    fun writeFile(path: String, content: String) {
+        File(path).writeText(content)
+    }
+
+    @LlmTool(description = "Delete a file", category = "write")
+    fun deleteFile(path: String) {
+        File(path).delete()
+    }
+}
+
+// Automatically creates category-based selection
+val tool = MatryoshkaTool.fromInstance(FileTools())
+// When invoked with {"category": "read"}, only read tools are exposed
+// When invoked with {"category": "write"}, only write tools are exposed
+----
+====
+
+===== @MatryoshkaTools Annotation Attributes
+
+|===
+|Attribute |Type |Default |Description
+
+|`name`
+|String
+|Required
+|Name of the facade tool the LLM will see
+
+|`description`
+|String
+|Required
+|Description explaining the tool category
+
+|`removeOnInvoke`
+|boolean
+|`true`
+|Whether to remove the facade after invocation
+
+|`categoryParameter`
+|String
+|`"category"`
+|Name of the parameter for category selection
+|===
+
+===== @LlmTool Category Attribute
+
+The `category` attribute on `@LlmTool` is used when the containing class has `@MatryoshkaTools`:
+
+- Tools with the same category are grouped together
+- Tools without a category are added to all category groups plus an "all" category
+- If no tools have categories, a simple (non-category-based) MatryoshkaTool is created
+
+===== Real-World Example: Spotify Integration
+
+Here's a real-world example from the Impromptu chatbot that uses `@MatryoshkaTools` to progressively disclose Spotify functionality:
+
+[source,java]
+----
+@MatryoshkaTools(
+    name = "spotify",
+    description = "Access Spotify music features. Invoke this tool to enable Spotify " +
+            "operations like playing music, searching tracks, managing playlists, " +
+            "and controlling playback."
+)
+public record SpotifyTools(ImpromptuUser user, SpotifyService spotifyService) {
+
+    @LlmTool(description = "Check if user has linked their Spotify account")
+    public String checkSpotifyStatus() { /* ... */ }
+
+    @LlmTool(description = "Get the user's Spotify playlists")
+    public String getPlaylists() { /* ... */ }
+
+    @LlmTool(description = "Search for tracks on Spotify by song name, artist, or both")
+    public String searchTracks(String query) { /* ... */ }
+
+    @LlmTool(description = "Play a track on Spotify by searching for it")
+    public String playTrack(String query) { /* ... */ }
+
+    @LlmTool(description = "Pause the current Spotify playback")
+    public String pausePlayback() { /* ... */ }
+
+    // ... more tools
+}
+----
+
+With this setup:
+
+1. The LLM initially sees a single `spotify` tool
+2. When the user says "play some jazz", the LLM invokes `spotify`
+3. The `spotify` facade is replaced with all the inner tools (`getPlaylists`, `searchTracks`, `playTrack`, etc.)
+4. The LLM can then call `searchTracks` or `playTrack` to fulfill the request
+
+===== Auto-Detection with Tool.fromInstance()
+
+When you use `Tool.fromInstance()` on a class annotated with `@MatryoshkaTools`, it automatically creates a `MatryoshkaTool`:
+
+[source,java]
+----
+// Auto-detects @MatryoshkaTools and creates a MatryoshkaTool
+List<Tool> tools = Tool.fromInstance(new SpotifyTools(user, service));
+// Returns a single MatryoshkaTool, not individual tools
+----
+
+This works seamlessly with `withToolObject()` on PromptRunner:
+
+[source,java]
+----
+context.ai()
+    .withToolObject(new SpotifyTools(user, spotifyService))
+    .respond("Play some classical music");
+// The SpotifyTools are automatically exposed as a single MatryoshkaTool facade
+----
+
+===== Nested MatryoshkaTools
+
+MatryoshkaTools can be nested for multi-level progressive disclosure.
+This enables organizing large tool collections into logical hierarchies where the LLM navigates by invoking facade tools.
+
+====== Programmatic Nesting
+
+Use `MatryoshkaTool.of()` to create nested hierarchies programmatically:
+
+[tabs]
+====
+Java::
++
+[source,java]
+----
+// Inner matryoshka for user management
+MatryoshkaTool userManagement = MatryoshkaTool.of(
+    "user_management",
+    "User management operations",
+    List.of(createUserTool, deleteUserTool, updateUserTool)
+);
+
+// Inner matryoshka for system config
+MatryoshkaTool systemConfig = MatryoshkaTool.of(
+    "system_config",
+    "System configuration operations",
+    List.of(updateConfigTool, backupTool, restoreTool)
+);
+
+// Outer matryoshka containing both
+MatryoshkaTool adminTool = MatryoshkaTool.of(
+    "admin_operations",
+    "Administrative operations. Invoke to see categories.",
+    List.of(userManagement, systemConfig)
+);
+
+// Flow:
+// 1. LLM sees: admin_operations
+// 2. LLM invokes: admin_operations -> sees: user_management, system_config
+// 3. LLM invokes: user_management -> sees: createUser, deleteUser, updateUser
+----
+
+Kotlin::
++
+[source,kotlin]
+----
+// Inner matryoshka for user management
+val userManagement = MatryoshkaTool.of(
+    name = "user_management",
+    description = "User management operations",
+    innerTools = listOf(createUserTool, deleteUserTool, updateUserTool)
+)
+
+// Inner matryoshka for system config
+val systemConfig = MatryoshkaTool.of(
+    name = "system_config",
+    description = "System configuration operations",
+    innerTools = listOf(updateConfigTool, backupTool, restoreTool)
+)
+
+// Outer matryoshka containing both
+val adminTool = MatryoshkaTool.of(
+    name = "admin_operations",
+    description = "Administrative operations. Invoke to see categories.",
+    innerTools = listOf(userManagement, systemConfig)
+)
+
+// Flow:
+// 1. LLM sees: admin_operations
+// 2. LLM invokes: admin_operations -> sees: user_management, system_config
+// 3. LLM invokes: user_management -> sees: createUser, deleteUser, updateUser
+----
+====
+
+====== Annotation-Based Nesting with Inner Classes
+
+You can also create nested hierarchies using `@MatryoshkaTools` annotations on inner classes.
+When `MatryoshkaTool.fromInstance()` is called, it automatically discovers and includes any nested inner classes that are also annotated with `@MatryoshkaTools`:
+
+[tabs]
+====
+Java::
++
+[source,java]
+----
+@MatryoshkaTools(
+    name = "admin_operations",
+    description = "Administrative operations. Invoke to access specific areas."
+)
+public class AdminTools {
+
+    @LlmTool(description = "Get system status")
+    public String getStatus() {
+        return "System is healthy";
+    }
+
+    // Nested inner class - automatically discovered and included as a nested MatryoshkaTool
+    @MatryoshkaTools(
+        name = "user_management",
+        description = "User management operations. Invoke to see specific tools."
+    )
+    public static class UserManagement {
+
+        @LlmTool(description = "Create a new user")
+        public String createUser(String username) { return "Created user: " + username; }
+
+        @LlmTool(description = "Delete a user")
+        public String deleteUser(String username) { return "Deleted user: " + username; }
+
+        // Can nest even deeper
+        @MatryoshkaTools(
+            name = "user_permissions",
+            description = "User permission operations"
+        )
+        public static class Permissions {
+
+            @LlmTool(description = "Grant permission to user")
+            public String grant(String user, String permission) { return "Granted"; }
+
+            @LlmTool(description = "Revoke permission from user")
+            public String revoke(String user, String permission) { return "Revoked"; }
+        }
+    }
+
+    @MatryoshkaTools(
+        name = "system_config",
+        description = "System configuration. Invoke to see config tools."
+    )
+    public static class SystemConfig {
+
+        @LlmTool(description = "Update configuration")
+        public String updateConfig(String key, String value) { return "Updated"; }
+
+        @LlmTool(description = "Backup configuration")
+        public String backup() { return "Backed up"; }
+    }
+}
+
+// Create the full nested hierarchy automatically
+MatryoshkaTool adminTool = MatryoshkaTool.fromInstance(new AdminTools());
+
+// Flow:
+// 1. LLM sees: admin_operations
+// 2. LLM invokes: admin_operations -> sees: getStatus, user_management, system_config
+// 3. LLM invokes: user_management -> sees: createUser, deleteUser, user_permissions
+// 4. LLM invokes: user_permissions -> sees: grant, revoke
+----
+
+Kotlin::
++
+[source,kotlin]
+----
+@MatryoshkaTools(
+    name = "admin_operations",
+    description = "Administrative operations. Invoke to access specific areas."
+)
+class AdminTools {
+
+    @LlmTool(description = "Get system status")
+    fun getStatus(): String = "System is healthy"
+
+    // Nested inner class - automatically discovered and included as a nested MatryoshkaTool
+    @MatryoshkaTools(
+        name = "user_management",
+        description = "User management operations. Invoke to see specific tools."
+    )
+    class UserManagement {
+
+        @LlmTool(description = "Create a new user")
+        fun createUser(username: String): String = "Created user: $username"
+
+        @LlmTool(description = "Delete a user")
+        fun deleteUser(username: String): String = "Deleted user: $username"
+
+        // Can nest even deeper
+        @MatryoshkaTools(
+            name = "user_permissions",
+            description = "User permission operations"
+        )
+        class Permissions {
+
+            @LlmTool(description = "Grant permission to user")
+            fun grant(user: String, permission: String): String = "Granted"
+
+            @LlmTool(description = "Revoke permission from user")
+            fun revoke(user: String, permission: String): String = "Revoked"
+        }
+    }
+
+    @MatryoshkaTools(
+        name = "system_config",
+        description = "System configuration. Invoke to see config tools."
+    )
+    class SystemConfig {
+
+        @LlmTool(description = "Update configuration")
+        fun updateConfig(key: String, value: String): String = "Updated"
+
+        @LlmTool(description = "Backup configuration")
+        fun backup(): String = "Backed up"
+    }
+}
+
+// Create the full nested hierarchy automatically
+val adminTool = MatryoshkaTool.fromInstance(AdminTools())
+
+// Flow:
+// 1. LLM sees: admin_operations
+// 2. LLM invokes: admin_operations -> sees: getStatus, user_management, system_config
+// 3. LLM invokes: user_management -> sees: createUser, deleteUser, user_permissions
+// 4. LLM invokes: user_permissions -> sees: grant, revoke
+----
+====
+
+This approach provides several benefits:
+
+* **Encapsulation**: All related tools are organized in a single class hierarchy
+* **Automatic discovery**: No manual wiring - inner classes with `@MatryoshkaTools` are automatically included
+* **Arbitrary depth**: Nest as many levels as needed to organize your tools logically
+* **Mixed content**: Each level can have both direct `@LlmTool` methods and nested `@MatryoshkaTools` classes
+
+===== Dynamically Configured Inner Tools
+
+A powerful pattern with `MatryoshkaTool.selectable()` is creating inner tools that are *configured* based on the parameters passed when invoking the facade.
+The selector function can create new tool instances with captured state, connection strings, or other configuration:
+
+[tabs]
+====
+Java::
++
+[source,java]
+----
+// MatryoshkaTool that configures database tools based on connection parameter
+MatryoshkaTool databaseTool = MatryoshkaTool.selectable(
+    "database",
+    "Database operations. Pass 'connection' to configure tools.",
+    Collections.emptyList(),  // Tools created dynamically
+    Tool.InputSchema.of(
+        Tool.Parameter.string("connection", "Database connection string")
+    ),
+    true,  // removeOnInvoke
+    input -> {
+        // Parse connection from input
+        ObjectMapper mapper = new ObjectMapper();
+        Map<String, Object> params = mapper.readValue(input, Map.class);
+        String connection = (String) params.getOrDefault("connection", "localhost");
+
+        // Create tools configured with the connection string
+        return List.of(
+            Tool.create("query", "Query database at " + connection, queryInput -> {
+                // Tool has captured the connection string
+                return Tool.Result.text("Queried " + connection + ": " + queryInput);
+            }),
+            Tool.create("insert", "Insert into database at " + connection, insertInput -> {
+                return Tool.Result.text("Inserted into " + connection);
+            })
+        );
+    }
+);
+
+// When LLM invokes with {"connection": "prod-db.example.com"}
+// The injected tools are configured to use that specific connection
+----
+
+Kotlin::
++
+[source,kotlin]
+----
+// MatryoshkaTool that configures database tools based on connection parameter
+val databaseTool = MatryoshkaTool.selectable(
+    name = "database",
+    description = "Database operations. Pass 'connection' to configure tools.",
+    innerTools = emptyList(),  // Tools created dynamically
+    inputSchema = Tool.InputSchema.of(
+        Tool.Parameter.string("connection", "Database connection string")
+    ),
+) { input ->
+    // Parse connection from input
+    val mapper = jacksonObjectMapper()
+    val params = mapper.readValue(input, Map::class.java)
+    val connection = params["connection"] as? String ?: "localhost"
+
+    // Create tools configured with the connection string
+    listOf(
+        Tool.of("query", "Query database at $connection") { queryInput ->
+            // Tool has captured the connection string
+            Tool.Result.text("Queried $connection: $queryInput")
+        },
+        Tool.of("insert", "Insert into database at $connection") { insertInput ->
+            Tool.Result.text("Inserted into $connection")
+        }
+    )
+}
+
+// When LLM invokes with {"connection": "prod-db.example.com"}
+// The injected tools are configured to use that specific connection
+----
+====
+
+This pattern is useful for:
+
+* **Multi-tenant systems**: Configure tools with tenant-specific credentials or endpoints
+* **Environment selection**: Let the LLM choose between dev/staging/prod environments
+* **Stateful operations**: Create tools that share state (like a shopping cart's item list)
+* **Dynamic service discovery**: Configure tools based on runtime service locations
+
+====== Example: Stateful Shopping Cart Tools
+
+[tabs]
+====
+Java::
++
+[source,java]
+----
+MatryoshkaTool cartTool = MatryoshkaTool.selectable(
+    "shopping_cart",
+    "Shopping cart. Pass 'cart_id' to select which cart to operate on.",
+    Collections.emptyList(),
+    Tool.InputSchema.of(
+        Tool.Parameter.string("cart_id", "Shopping cart ID")
+    ),
+    true,
+    input -> {
+        // Each invocation creates a fresh set of tools with shared state
+        String cartId = parseCartId(input);
+        List<String> cartItems = new ArrayList<>();  // Shared state
+
+        return List.of(
+            Tool.create("add_item", "Add item to cart " + cartId,
+                Tool.InputSchema.of(Tool.Parameter.string("item", "Item name")),
+                itemInput -> {
+                    String item = parseItem(itemInput);
+                    cartItems.add(item);  // Captured state
+                    return Tool.Result.text("Added " + item + ". Total: " + cartItems.size());
+                }
+            ),
+            Tool.create("view_cart", "View cart " + cartId + " contents", viewInput -> {
+                return Tool.Result.text("Cart " + cartId + ": " + String.join(", ", cartItems));
+            }),
+            Tool.create("checkout", "Checkout cart " + cartId, checkoutInput -> {
+                String total = calculateTotal(cartItems);
+                cartItems.clear();
+                return Tool.Result.text("Checked out " + cartId + " for " + total);
+            })
+        );
+    }
+);
+----
+
+Kotlin::
++
+[source,kotlin]
+----
+val cartTool = MatryoshkaTool.selectable(
+    name = "shopping_cart",
+    description = "Shopping cart. Pass 'cart_id' to select which cart to operate on.",
+    innerTools = emptyList(),
+    inputSchema = Tool.InputSchema.of(
+        Tool.Parameter.string("cart_id", "Shopping cart ID")
+    ),
+) { input ->
+    // Each invocation creates a fresh set of tools with shared state
+    val cartId = parseCartId(input)
+    val cartItems = mutableListOf<String>()  // Shared state
+
+    listOf(
+        Tool.of(
+            name = "add_item",
+            description = "Add item to cart $cartId",
+            inputSchema = Tool.InputSchema.of(Tool.Parameter.string("item", "Item name"))
+        ) { itemInput ->
+            val item = parseItem(itemInput)
+            cartItems.add(item)  // Captured state
+            Tool.Result.text("Added $item. Total: ${cartItems.size}")
+        },
+        Tool.of("view_cart", "View cart $cartId contents") { _ ->
+            Tool.Result.text("Cart $cartId: ${cartItems.joinToString(", ")}")
+        },
+        Tool.of("checkout", "Checkout cart $cartId") { _ ->
+            val total = calculateTotal(cartItems)
+            cartItems.clear()
+            Tool.Result.text("Checked out $cartId for $total")
+        }
+    )
+}
+----
+====
+
+===== Comparison with Other Approaches
+
+Other agent frameworks address large tool collections with different approaches, each with trade-offs:
+
+* **Anthropic's Tool Search Tool**: Uses a `defer_loading: true` flag to prevent tools from being loaded upfront. Tools are discovered via a separate "Tool Search Tool" that searches tool metadata. This requires maintaining searchable tool descriptions and adds latency for each discovery step.
+
+* **LangGraph Dynamic Tool Calling**: Uses vector stores and semantic search to select relevant tools based on the user's query. This requires embedding infrastructure, vector database setup, and careful tuning of similarity thresholds.
+
+* **Google ADK AgentTool**: Uses sub-agents that recursively delegate to other agents, each potentially having their own tool sets. Tool discovery is implicit through the agent hierarchy.
+
+* **LangChain4j ToolProvider**: Provides a `ToolProvider` interface for dynamic tool selection, but it works _before_ the LLM call by analyzing the incoming user message. For example, "if the message contains 'booking', include booking tools." This is pre-filtering based on message content, not progressive disclosure through tool invocation. LangChain4j's documentation also suggests embedding-based classification, RAG over tool descriptions, or two-pass LLM selection—all requiring additional infrastructure or extra LLM calls.
+
+MatryoshkaTool takes a fundamentally different approach: *invoke to reveal*.
+Instead of searching through tool metadata, the LLM simply invokes a facade tool to unlock the tools it contains.
+
+**Beyond Search: Dynamic Tool Configuration**
+
+Crucially, MatryoshkaTool goes far beyond what any search-based approach can offer.
+Search can only *find* pre-existing tools—it cannot create new ones or modify their behavior.
+With `MatryoshkaTool.selectable()`, the selector function can:
+
+* **Create entirely new tool instances** with different implementations based on runtime parameters
+* **Capture configuration** (connection strings, credentials, endpoints) into the tool's behavior
+* **Share mutable state** between the tools created in a single invocation
+* **Customize tool descriptions** to reflect the specific context of use
+
+For example, when an LLM invokes a "database" MatryoshkaTool with `{"connection": "prod-db.example.com"}`, the returned tools don't just have different descriptions—they have *different behavior* that operates on that specific database.
+This is fundamentally impossible with search-based discovery, which can only return references to pre-defined tools.
+
+This provides several advantages:
+
+|===
+|Aspect |Other Approaches |MatryoshkaTool
+
+|*Infrastructure*
+|Requires vector stores, embeddings, search indices, or pre-filtering logic
+|No additional infrastructure required
+
+|*Selection Timing*
+|Before LLM call (pre-filtering based on message analysis)
+|After LLM decides to invoke a facade (LLM-driven discovery)
+
+|*Latency*
+|Search/embedding adds latency; two-pass selection doubles LLM calls
+|Instant unlock on invocation
+
+|*Scalability*
+|Search quality degrades with very large tool sets; requires careful tuning
+|Scales to any number of tools via nesting without degradation
+
+|*Determinism*
+|Search results can vary based on embedding similarity
+|Deterministic: invoking a facade always reveals the same tools
+
+|*Cost*
+|Embedding generation, vector search, or extra LLM calls incur compute costs
+|No additional compute beyond the tool call itself
+
+|*Dynamic Behavior*
+|Can only return references to pre-existing tools
+|Can create new tool instances with runtime-configured behavior
+|===
+
+The hierarchical nesting capability of MatryoshkaTool means you can organize thousands of tools into a logical tree structure.
+The LLM navigates this tree by making simple invocations, with no search overhead at any level.
+For example, a top-level "admin_operations" facade might reveal 5 category facades, each revealing 20 specific tools—giving access to 100 tools with at most 2 invocations.
+
+[NOTE]
+.MatryoshkaTool vs LlmReference
+====
+Both `MatryoshkaTool` and `LlmReference` expose tools to the LLM, but they serve different purposes:
+
+**Use MatryoshkaTool when:**
+
+* You have a single top-level capability that the LLM can invoke as one tool
+* The prompt contribution is short and can fit in the tool description
+* Example: A "database" tool that reveals query/insert/delete tools on invocation
+
+**Use LlmReference when:**
+
+* The prompt contribution is long or of general significance (appears in system prompt)
+* You have a bunch of related tools, not just one top-level tool
+* You need `notes()` for detailed usage instructions separate from the tool descriptions
+* The reference contributes context beyond just tool availability
+
+**Implementing both:**
+
+Classes like `Memory` and `ToolishRag` implement both `Tool` and `LlmReference`, giving maximum flexibility:
+
+[source,kotlin]
+----
+// Use as LlmReference (adds to system prompt + tools)
+ai.withReference(memory).respond(...)
+
+// Use as Tool directly (just the tool)
+ai.withTool(memory).respond(...)
+----
+
+When used as an `LlmReference`, the `tools()` method exposes the inner tools directly.
+When used as a `Tool`, the implementation wraps them in a `MatryoshkaTool` facade.
+====

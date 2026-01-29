@@ -25,7 +25,7 @@ import com.embabel.agent.core.hitl.ConfirmationRequest
 import com.embabel.agent.core.support.InMemoryBlackboard
 import com.embabel.agent.core.support.SimpleAgentProcess
 import com.embabel.agent.domain.io.UserInput
-import com.embabel.agent.spi.LlmInteraction
+import com.embabel.agent.core.support.LlmInteraction
 import com.embabel.agent.spi.LlmOperations
 import com.embabel.agent.spi.support.DefaultPlannerFactory
 import com.embabel.agent.support.Dog
@@ -42,7 +42,7 @@ import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.Disabled
 import org.junit.jupiter.api.Nested
 import org.junit.jupiter.api.Test
-import org.springframework.ai.tool.ToolCallback
+import com.embabel.agent.api.tool.Tool
 import com.embabel.agent.core.Agent as CoreAgent
 
 
@@ -122,99 +122,6 @@ class AgentMetadataReaderActionTest {
             action.preconditions["condition1"],
             "Should have custom precondition",
         )
-    }
-
-    @Test
-    fun `one action with custom tool group`() {
-        val reader = AgentMetadataReader()
-        val metadata = reader.createAgentMetadata(OneTransformerActionWithCustomToolGroupOnly())
-        assertNotNull(metadata)
-        assertEquals(1, metadata!!.actions.size)
-        val action = metadata.actions.single()
-        assertEquals(1, action.inputs.size, "Should have 1 input")
-        assertEquals(UserInput::class.java.name, action.inputs.single().type)
-        assertEquals(1, action.outputs.size, "Should have 1 output")
-        assertEquals(
-            PersonWithReverseTool::class.java.name,
-            action.outputs.single().type,
-            "Output name must match",
-        )
-        assertEquals(1, action.toolGroups.size)
-        assertEquals(ToolGroupRequirement("magic"), action.toolGroups.single())
-    }
-
-    @Test
-    fun `one action with custom tool group taking interface`() {
-        val reader = AgentMetadataReader()
-        val metadata = reader.createAgentMetadata(OneTransformerActionTakingInterfaceWithCustomToolGroupOnly())
-        assertNotNull(metadata)
-        assertEquals(1, metadata!!.actions.size)
-        val action = metadata.actions.single()
-        assertEquals(1, action.inputs.size, "Should have 1 input")
-        assertEquals(PersonWithReverseTool::class.java.name, action.inputs.single().type)
-        assertEquals(1, action.outputs.size, "Should have 1 output")
-        assertEquals(
-            Frog::class.java.name,
-            action.outputs.single().type,
-            "Output name must match",
-        )
-        assertEquals(1, action.toolGroups.size)
-        assertEquals("magic", action.toolGroups.single().role)
-        val ap = IntegrationTestUtils.dummyAgentPlatform()
-        val agentProcess =
-            ap.runAgentFrom(metadata as CoreAgent, ProcessOptions(), mapOf("it" to PersonWithReverseTool("John Doe")))
-        assertEquals(AgentProcessStatusCode.COMPLETED, agentProcess.status)
-        assertEquals(Frog("John Doe"), agentProcess.lastResult())
-    }
-
-    @Test
-    fun `custom tool group is available through operation context`() {
-        val reader = AgentMetadataReader()
-        val metadata =
-            reader.createAgentMetadata(OneTransformerActionTakingInterfaceWithExpectationCustomToolGroupOnly())
-        assertNotNull(metadata)
-        assertEquals(1, metadata!!.actions.size)
-        val action = metadata.actions.single()
-        assertEquals(1, action.inputs.size, "Should have 1 input")
-        assertEquals(PersonWithReverseTool::class.java.name, action.inputs.single().type)
-        assertEquals(1, action.outputs.size, "Should have 1 output")
-        assertEquals(
-            Frog::class.java.name,
-            action.outputs.single().type,
-            "Output name must match",
-        )
-        assertEquals(1, action.toolGroups.size)
-        assertEquals("magic", action.toolGroups.single().role)
-        val ap = IntegrationTestUtils.dummyAgentPlatform()
-        val agentProcess =
-            ap.runAgentFrom(metadata as CoreAgent, ProcessOptions(), mapOf("it" to PersonWithReverseTool("John Doe")))
-        assertEquals(AgentProcessStatusCode.COMPLETED, agentProcess.status)
-        assertEquals(Frog("John Doe"), agentProcess.lastResult())
-    }
-
-    @Test
-    fun `custom tool group requirement is available through operation context`() {
-        val reader = AgentMetadataReader()
-        val metadata =
-            reader.createAgentMetadata(OneTransformerActionTakingInterfaceWithExpectationCustomToolGroupRequirementOnly())
-        assertNotNull(metadata)
-        assertEquals(1, metadata!!.actions.size)
-        val action = metadata.actions.single()
-        assertEquals(1, action.inputs.size, "Should have 1 input")
-        assertEquals(PersonWithReverseTool::class.java.name, action.inputs.single().type)
-        assertEquals(1, action.outputs.size, "Should have 1 output")
-        assertEquals(
-            Frog::class.java.name,
-            action.outputs.single().type,
-            "Output name must match",
-        )
-        assertEquals(2, action.toolGroups.size, "Had ${action.toolGroups} tool groups, expected 1")
-        assertEquals(setOf("magic", "frogs"), action.toolGroups.map { it.role }.toSet())
-        val ap = IntegrationTestUtils.dummyAgentPlatform()
-        val agentProcess =
-            ap.runAgentFrom(metadata as CoreAgent, ProcessOptions(), mapOf("it" to PersonWithReverseTool("John Doe")))
-        assertEquals(AgentProcessStatusCode.COMPLETED, agentProcess.status)
-        assertEquals(Frog("John Doe"), agentProcess.lastResult())
     }
 
     @Test
@@ -882,27 +789,27 @@ class AgentMetadataReaderActionTest {
 
         @Test
         fun `prompt action invocation with tool object passed in via using with renaming`() {
-            val toolCallbacks =
+            val tools =
                 testToolsAreExposed(FromPersonUsesObjectToolsViaUsingWithRenaming(), expectedToolCount = 2)
             assertTrue(
-                toolCallbacks.any { it.toolDefinition.name() == "_thing" },
-                "Should have renamed thing tool, had ${toolCallbacks.map { it.toolDefinition.name() }}",
+                tools.any { it.definition.name == "_thing" },
+                "Should have renamed thing tool, had ${tools.map { it.definition.name }}",
             )
         }
 
         @Test
         fun `prompt action invocation with tool object passed in via context with renaming`() {
-            val toolCallbacks =
+            val tools =
                 testToolsAreExposed(FromPersonUsesObjectToolsViaContextWithRenaming(), expectedToolCount = 2)
             assertTrue(
-                toolCallbacks.any { it.toolDefinition.name() == "_thing" },
-                "Should have renamed thing tool, had ${toolCallbacks.map { it.toolDefinition.name() }}",
+                tools.any { it.definition.name == "_thing" },
+                "Should have renamed thing tool, had ${tools.map { it.definition.name }}",
             )
         }
 
         @Test
         fun `prompt action invocation with tool object passed in via using with filter`() {
-            val toolCallbacks =
+            val tools =
                 testToolsAreExposed(FromPersonUsesObjectToolsViaUsingWithFilter(), expectedToolCount = 1)
 //            assertF(
 //                toolCallbacks.any { it.toolDefinition.name() == "_thing" },
@@ -913,7 +820,7 @@ class AgentMetadataReaderActionTest {
         private fun testToolsAreExposed(
             instance: Any,
             expectedToolCount: Int = 1,
-        ): List<ToolCallback> {
+        ): List<Tool> {
             val reader = AgentMetadataReader()
             val metadata = reader.createAgentMetadata(instance)
             assertNotNull(metadata)
@@ -982,12 +889,12 @@ class AgentMetadataReaderActionTest {
             assertEquals("John Doe", (pc.blackboard.lastResult() as UserInput).content)
             assertEquals(
                 expectedToolCount,
-                llmo.captured.toolCallbacks.size,
-                "Should have $expectedToolCount tools, had ${llmo.captured.toolCallbacks.map { it.toolDefinition.name() }}",
+                llmo.captured.tools.size,
+                "Should have $expectedToolCount tools, had ${llmo.captured.tools.map { it.definition.name }}",
             )
-            assertTrue(llmo.captured.toolCallbacks.any { it.toolDefinition.name() == "reverse" })
+            assertTrue(llmo.captured.tools.any { it.definition.name == "reverse" })
             assertEquals(DefaultModelSelectionCriteria, llmo.captured.llm.criteria)
-            return llmo.captured.toolCallbacks
+            return llmo.captured.tools
         }
     }
 

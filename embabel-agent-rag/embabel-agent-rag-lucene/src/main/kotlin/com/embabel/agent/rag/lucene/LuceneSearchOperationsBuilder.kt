@@ -40,6 +40,9 @@ data class LuceneSearchOperationsBuilder(
     override fun withContentChunker(contentChunker: ContentChunker): LuceneSearchOperationsBuilder =
         copy(chunkTransformer = chunkTransformer)
 
+    override fun withChunkTransformer(chunkTransformer: ChunkTransformer): LuceneSearchOperationsBuilder =
+        copy(chunkTransformer = chunkTransformer)
+
     /**
      * Sets the path where the Lucene index will be stored.
      * If not set, storage will be in memory only.
@@ -56,6 +59,7 @@ data class LuceneSearchOperationsBuilder(
             embeddingService = embeddingService,
             indexPath = indexPath,
             chunkerConfig = chunkerConfig,
+            chunkTransformer = chunkTransformer,
         )
         luceneSearchOperations.provision()
         return luceneSearchOperations

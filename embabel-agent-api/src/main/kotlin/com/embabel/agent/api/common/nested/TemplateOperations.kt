@@ -15,62 +15,17 @@
  */
 package com.embabel.agent.api.common.nested
 
-import com.embabel.agent.api.common.PromptRunnerOperations
-import com.embabel.chat.AssistantMessage
-import com.embabel.chat.Conversation
-import com.embabel.chat.SystemMessage
-import com.embabel.common.textio.template.TemplateRenderer
+import com.embabel.agent.api.common.PromptRunner
 
 /**
  * Llm operations based on a compiled template.
  * Similar to [com.embabel.agent.api.common.PromptRunnerOperations], but taking a model instead of a template string.
- * Template names will be resolved by the [com.embabel.common.textio.template.TemplateRenderer] provided.
  */
-class TemplateOperations(
-    templateName: String,
-    templateRenderer: TemplateRenderer,
-    private val promptRunnerOperations: PromptRunnerOperations,
-) {
-
-    private val compiledTemplate = templateRenderer.compileLoadedTemplate(templateName)
-
-    /**
-     * Create an object of the given type using the given model to render the template
-     * and LLM options from context
-     */
-    fun <T> createObject(
-        outputClass: Class<T>,
-        model: Map<String, Any>,
-    ): T = promptRunnerOperations.createObject(
-        prompt = compiledTemplate.render(model = model),
-        outputClass = outputClass,
+@Deprecated(
+    message = "Use PromptRunner.Rendering instead",
+    replaceWith = ReplaceWith(
+        expression = "PromptRunner.Rendering",
+        imports = arrayOf("com.embabel.agent.api.common.PromptRunner.Rendering"),
     )
-
-    /**
-     * Generate text using the given model to render the template
-     * and LLM options from context
-     */
-    fun generateText(
-        model: Map<String, Any>,
-    ): String = promptRunnerOperations.generateText(
-        prompt = compiledTemplate.render(model = model),
-    )
-
-    /**
-     * Respond in the conversation using the rendered template as system prompt.
-     * @param conversation the conversation so far
-     * @param model the model to render the system prompt template with.
-     * Defaults to the empty map (which is appropriate for static templates)
-     */
-    @JvmOverloads
-    fun respondWithSystemPrompt(
-        conversation: Conversation,
-        model: Map<String, Any> = emptyMap(),
-    ): AssistantMessage = promptRunnerOperations.respond(
-        messages = listOf(
-            SystemMessage(
-                content = compiledTemplate.render(model = model)
-            )
-        ) + conversation.messages,
-    )
-}
+)
+interface TemplateOperations : PromptRunner.Rendering

@@ -18,7 +18,9 @@ package com.embabel.agent.rag.service
 import com.embabel.agent.core.DataDictionary
 import com.embabel.agent.core.DomainType
 import com.embabel.agent.core.JvmType
+import com.embabel.agent.rag.filter.EntityFilter
 import com.embabel.agent.rag.filter.PropertyFilter
+import com.embabel.agent.rag.filter.matchesEntityFilter
 import com.embabel.agent.rag.model.NamedEntity
 import com.embabel.agent.rag.model.NamedEntityData
 import com.embabel.agent.rag.model.Relationship
@@ -48,7 +50,8 @@ data class RelationshipData(
  * Extends [FilteringVectorSearch] and [FilteringTextSearch] to support native metadata filtering
  * when available, otherwise falls back to post-filtering.
  */
-interface NamedEntityDataRepository : CoreSearchOperations, FinderOperations, FilteringVectorSearch, FilteringTextSearch, RelationshipNavigator {
+interface NamedEntityDataRepository : CoreSearchOperations, FinderOperations, FilteringVectorSearch,
+    FilteringTextSearch, RelationshipNavigator {
 
     /**
      * ObjectMapper for hydrating entities to typed JVM instances.
@@ -76,7 +79,7 @@ interface NamedEntityDataRepository : CoreSearchOperations, FinderOperations, Fi
     fun vectorSearch(
         request: TextSimilaritySearchRequest,
         metadataFilter: PropertyFilter? = null,
-        propertyFilter: PropertyFilter? = null,
+        entityFilter: EntityFilter? = null,
     ): List<SimilarityResult<NamedEntityData>>
 
     /**
@@ -115,13 +118,13 @@ interface NamedEntityDataRepository : CoreSearchOperations, FinderOperations, Fi
      *
      * @param request the text similarity search request
      * @param metadataFilter optional metadata filter to apply
-     * @param propertyFilter optional property filter to apply
+     * @param entityFilter optional entity filter to apply
      * @return matching results ranked by BM25 relevance score
      */
     fun textSearch(
         request: TextSimilaritySearchRequest,
         metadataFilter: PropertyFilter? = null,
-        propertyFilter: PropertyFilter? = null,
+        entityFilter: EntityFilter? = null,
     ): List<SimilarityResult<NamedEntityData>>
 
     /**
@@ -162,13 +165,13 @@ interface NamedEntityDataRepository : CoreSearchOperations, FinderOperations, Fi
             return emptyList()
         }
         val namedEntityClass = clazz as Class<out NamedEntity>
-        val useNative = isNativeType(namedEntityClass)
-        return vectorSearch(request, metadataFilter = null, propertyFilter = null).mapNotNull { similarityResult ->
-            val typed: NamedEntity? = if (useNative) {
+        return vectorSearch(request, metadataFilter = null, entityFilter = null).mapNotNull { similarityResult ->
+            // Try native first, fall back to generic hydration on null or exception
+            val typed: NamedEntity? = try {
                 findNativeById(similarityResult.match.id, namedEntityClass)
-            } else {
-                similarityResult.match.toTypedInstance(objectMapper, namedEntityClass, this)
-            }
+            } catch (_: Exception) {
+                null
+            } ?: similarityResult.match.toTypedInstance(objectMapper, namedEntityClass, this)
             typed?.let { SimilarityResult(it as T, similarityResult.score) }
         }
     }
@@ -193,14 +196,13 @@ interface NamedEntityDataRepository : CoreSearchOperations, FinderOperations, Fi
             return emptyList()
         }
         val namedEntityClass = clazz as Class<out NamedEntity>
-        val useNative = isNativeType(namedEntityClass)
-        return textSearch(request, metadataFilter = null, propertyFilter = null).mapNotNull { similarityResult ->
-            val typed: NamedEntity? = if (useNative) {
-                // Use native store loading for @NodeFragment and similar classes
+        return textSearch(request, metadataFilter = null, entityFilter = null).mapNotNull { similarityResult ->
+            // Try native first, fall back to generic hydration on null or exception
+            val typed: NamedEntity? = try {
                 findNativeById(similarityResult.match.id, namedEntityClass)
-            } else {
-                similarityResult.match.toTypedInstance(objectMapper, namedEntityClass, this)
-            }
+            } catch (_: Exception) {
+                null
+            } ?: similarityResult.match.toTypedInstance(objectMapper, namedEntityClass, this)
             typed?.let { SimilarityResult(it as T, similarityResult.score) }
         }
     }
@@ -215,7 +217,7 @@ interface NamedEntityDataRepository : CoreSearchOperations, FinderOperations, Fi
      * @param request the search request
      * @param clazz the target type for hydration
      * @param metadataFilter metadata filter to apply
-     * @param propertyFilter property filter to apply
+     * @param entityFilter property filter to apply
      * @return list of similarity results with hydrated instances
      */
     @Suppress("UNCHECKED_CAST")
@@ -223,19 +225,19 @@ interface NamedEntityDataRepository : CoreSearchOperations, FinderOperations, Fi
         request: TextSimilaritySearchRequest,
         clazz: Class<T>,
         metadataFilter: PropertyFilter?,
-        propertyFilter: PropertyFilter?,
+        entityFilter: EntityFilter?,
     ): List<SimilarityResult<T>> {
         if (!NamedEntity::class.java.isAssignableFrom(clazz)) {
             return emptyList()
         }
         val namedEntityClass = clazz as Class<out NamedEntity>
-        val useNative = isNativeType(namedEntityClass)
-        return vectorSearch(request, metadataFilter, propertyFilter).mapNotNull { similarityResult ->
-            val typed: NamedEntity? = if (useNative) {
+        return vectorSearch(request, metadataFilter, entityFilter).mapNotNull { similarityResult ->
+            // Try native first, fall back to generic hydration on null or exception
+            val typed: NamedEntity? = try {
                 findNativeById(similarityResult.match.id, namedEntityClass)
-            } else {
-                similarityResult.match.toTypedInstance(objectMapper, namedEntityClass, this)
-            }
+            } catch (_: Exception) {
+                null
+            } ?: similarityResult.match.toTypedInstance(objectMapper, namedEntityClass, this)
             typed?.let { SimilarityResult(it as T, similarityResult.score) }
         }
     }
@@ -250,7 +252,7 @@ interface NamedEntityDataRepository : CoreSearchOperations, FinderOperations, Fi
      * @param request the search request
      * @param clazz the target type for hydration
      * @param metadataFilter metadata filter to apply
-     * @param propertyFilter property filter to apply
+     * @param entityFilter property filter to apply
      * @return list of similarity results with hydrated instances
      */
     @Suppress("UNCHECKED_CAST")
@@ -258,19 +260,19 @@ interface NamedEntityDataRepository : CoreSearchOperations, FinderOperations, Fi
         request: TextSimilaritySearchRequest,
         clazz: Class<T>,
         metadataFilter: PropertyFilter?,
-        propertyFilter: PropertyFilter?,
+        entityFilter: EntityFilter?,
     ): List<SimilarityResult<T>> {
         if (!NamedEntity::class.java.isAssignableFrom(clazz)) {
             return emptyList()
         }
         val namedEntityClass = clazz as Class<out NamedEntity>
-        val useNative = isNativeType(namedEntityClass)
-        return textSearch(request, metadataFilter, propertyFilter).mapNotNull { similarityResult ->
-            val typed: NamedEntity? = if (useNative) {
+        return textSearch(request, metadataFilter, entityFilter).mapNotNull { similarityResult ->
+            // Try native first, fall back to generic hydration on null or exception
+            val typed: NamedEntity? = try {
                 findNativeById(similarityResult.match.id, namedEntityClass)
-            } else {
-                similarityResult.match.toTypedInstance(objectMapper, namedEntityClass, this)
-            }
+            } catch (_: Exception) {
+                null
+            } ?: similarityResult.match.toTypedInstance(objectMapper, namedEntityClass, this)
             typed?.let { SimilarityResult(it as T, similarityResult.score) }
         }
     }
@@ -327,8 +329,25 @@ interface NamedEntityDataRepository : CoreSearchOperations, FinderOperations, Fi
     /**
      * Create a relationship between two retrievables (entities, chunks, etc.).
      * For example, linking a Chunk to the NamedEntity it mentions.
+     * Note: This always creates a new relationship. Use [mergeRelationship] to avoid duplicates.
      */
     fun createRelationship(a: RetrievableIdentifier, b: RetrievableIdentifier, relationship: RelationshipData)
+
+    /**
+     * Merge a relationship between two retrievables (entities, chunks, etc.).
+     * If a relationship of the same type already exists between the two entities,
+     * it will be updated with the new properties. Otherwise, a new relationship is created.
+     *
+     * Use this instead of [createRelationship] when you want to avoid duplicate relationships.
+     *
+     * @param a The source entity identifier
+     * @param b The target entity identifier
+     * @param relationship The relationship data (type and properties)
+     */
+    fun mergeRelationship(a: RetrievableIdentifier, b: RetrievableIdentifier, relationship: RelationshipData) {
+        // Default implementation falls back to createRelationship for backwards compatibility
+        createRelationship(a, b, relationship)
+    }
 
     /**
      * Find entities related to the given entity via a named relationship.
@@ -381,6 +400,40 @@ interface NamedEntityDataRepository : CoreSearchOperations, FinderOperations, Fi
      * @param label The label to search for (e.g., "Person", "Organization")
      */
     fun findByLabel(label: String): List<NamedEntityData>
+
+    /**
+     * Find entities with a specific label, optionally filtered by property constraints.
+     *
+     * @param label The label to search for (e.g., "Person", "Organization")
+     * @param filter Optional property filter to apply to matching entities
+     * @return list of matching entities
+     */
+    fun find(label: String, filter: PropertyFilter? = null): List<NamedEntityData> {
+        val candidates = findByLabel(label)
+        return if (filter != null) {
+            candidates.filter { it.matchesEntityFilter(filter) }
+        } else {
+            candidates
+        }
+    }
+
+    /**
+     * Find entities matching any of the specified labels, optionally filtered by property constraints.
+     *
+     * @param labels The labels to search for (matches entities with any of the labels)
+     * @param filter Optional property filter to apply to matching entities
+     * @return list of matching entities (deduplicated by ID)
+     */
+    fun find(labels: EntityFilter.HasAnyLabel, filter: PropertyFilter? = null): List<NamedEntityData> {
+        val candidates = labels.labels
+            .flatMap { findByLabel(it) }
+            .distinctBy { it.id }
+        return if (filter != null) {
+            candidates.filter { it.matchesEntityFilter(filter) }
+        } else {
+            candidates
+        }
+    }
 
     // === Typed hydration methods ===
 
@@ -447,9 +500,11 @@ interface NamedEntityDataRepository : CoreSearchOperations, FinderOperations, Fi
      * @return the hydrated instance, or null if not found or hydration fails
      */
     fun <T : NamedEntity> findTypedById(id: String, type: Class<T>): T? {
-        // Try native store first, but only if this type is natively mapped
-        if (isNativeType(type)) {
+        // Try native store first - accept null or exception as "not supported"
+        try {
             findNativeById(id, type)?.let { return it }
+        } catch (_: Exception) {
+            // Native store doesn't support this type, fall back to generic lookup
         }
 
         // Fall back to generic lookup
@@ -484,8 +539,12 @@ interface NamedEntityDataRepository : CoreSearchOperations, FinderOperations, Fi
      * @return list of hydrated instances
      */
     fun <T : NamedEntity> findAll(type: Class<T>): List<T> {
-        // Try native store first
-        findNativeAll(type)?.let { return it }
+        // Try native store first - accept null or exception as "not supported"
+        try {
+            findNativeAll(type)?.let { return it }
+        } catch (_: Exception) {
+            // Native store doesn't support this type, fall back to generic lookup
+        }
 
         // Fall back to generic lookup
         val jvmType = JvmType(type)
@@ -581,11 +640,13 @@ interface NamedEntityDataRepository : CoreSearchOperations, FinderOperations, Fi
             return null
         }
 
-        // Try native store first for each matching type that supports native loading
+        // Try native store first for each matching type - accept exception as "not supported"
         for (jvmType in matchingTypes) {
             val clazz = jvmType.clazz as Class<out NamedEntity>
-            if (isNativeType(clazz)) {
+            try {
                 findNativeById(id, clazz)?.let { return it }
+            } catch (_: Exception) {
+                // Native store doesn't support this type, continue to next or fall back
             }
         }
 

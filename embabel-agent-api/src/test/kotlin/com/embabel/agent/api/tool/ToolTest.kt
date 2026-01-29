@@ -79,6 +79,31 @@ class ToolTest {
         }
     }
 
+    /**
+     * Tools with List parameters - like MathTools.mean(numbers: List<Double>)
+     */
+    class ListParameterTools {
+        @LlmTool(description = "Find the mean of a list of numbers")
+        fun mean(@Param(description = "List of numbers to average") numbers: List<Double>): Double {
+            return if (numbers.isEmpty()) 0.0 else numbers.sum() / numbers.size
+        }
+
+        @LlmTool(description = "Find the minimum value in a list of numbers")
+        fun min(@Param(description = "List of numbers") numbers: List<Double>): Double {
+            return numbers.minOrNull() ?: Double.NaN
+        }
+
+        @LlmTool(description = "Sum a list of integers")
+        fun sumIntegers(@Param(description = "List of integers") numbers: List<Int>): Int {
+            return numbers.sum()
+        }
+
+        @LlmTool(description = "Concatenate a list of strings")
+        fun concatenate(@Param(description = "List of strings") strings: List<String>): String {
+            return strings.joinToString("")
+        }
+    }
+
     @Nested
     inner class ToolCreation {
 
@@ -249,6 +274,48 @@ class ToolTest {
             assertTrue(json.contains("\"type\":\"integer\""))
             assertTrue(json.contains("\"type\":\"number\""))
             assertTrue(json.contains("\"type\":\"boolean\""))
+        }
+
+        @Test
+        fun `schema for method with List parameter should include items type`() {
+            // This tests that MathTools.mean(numbers: List<Double>) generates correct schema
+            val tools = Tool.fromInstance(ListParameterTools())
+            val meanTool = tools.find { it.definition.name == "mean" }!!
+
+            val json = meanTool.definition.inputSchema.toJsonSchema()
+
+            // Should have array type for the numbers parameter
+            assertTrue(json.contains("\"type\":\"array\""), "Schema should have array type: $json")
+
+            // IMPORTANT: Should have items property specifying element type
+            // Without this, LLMs don't know what type of elements the array should contain
+            assertTrue(json.contains("\"items\""), "Schema should have items property for array: $json")
+            assertTrue(
+                json.contains("\"items\":{\"type\":\"number\"}") ||
+                    json.contains("\"items\": {\"type\": \"number\"}") ||
+                    json.contains("\"items\":{\"type\":\"integer\"}") ||
+                    json.contains("\"items\": {\"type\": \"integer\"}"),
+                "Array items should have numeric type: $json"
+            )
+        }
+
+        @Test
+        fun `schema for method with List of String parameter should include string items type`() {
+            val tools = Tool.fromInstance(ListParameterTools())
+            val concatenateTool = tools.find { it.definition.name == "concatenate" }!!
+
+            val json = concatenateTool.definition.inputSchema.toJsonSchema()
+
+            // Should have array type
+            assertTrue(json.contains("\"type\":\"array\""), "Schema should have array type: $json")
+
+            // Should have items property with string type
+            assertTrue(json.contains("\"items\""), "Schema should have items property for array: $json")
+            assertTrue(
+                json.contains("\"items\":{\"type\":\"string\"}") ||
+                    json.contains("\"items\": {\"type\": \"string\"}"),
+                "Array items should have string type: $json"
+            )
         }
     }
 
@@ -441,6 +508,135 @@ class ToolTest {
         }
     }
 
+    // Test fixtures for complex type schema generation (Issue #1326)
+    data class WrappedType(
+        val internalId: Int,
+        val name: String,
+    )
+
+    data class Address(
+        val street: String,
+        val city: String,
+        val zipCode: String,
+    )
+
+    data class NestedWrapper(
+        val address: Address,
+        val label: String,
+    )
+
+    class ComplexParameterTools {
+        @LlmTool(description = "Get information using a wrapped type")
+        fun getInformation(
+            @Param(description = "The wrapped type") someType: WrappedType,
+        ): String {
+            return "ID: ${someType.internalId}, Name: ${someType.name}"
+        }
+
+        @LlmTool(description = "Process an address")
+        fun processAddress(
+            @Param(description = "The address to process") address: Address,
+        ): String {
+            return "${address.street}, ${address.city} ${address.zipCode}"
+        }
+
+        @LlmTool(description = "Handle nested complex types")
+        fun handleNested(
+            @Param(description = "Nested wrapper") wrapper: NestedWrapper,
+        ): String {
+            return "${wrapper.label}: ${wrapper.address.city}"
+        }
+
+        @LlmTool(description = "Mix of simple and complex params")
+        fun mixedParams(
+            @Param(description = "Simple string") name: String,
+            @Param(description = "Complex type") wrapped: WrappedType,
+            @Param(description = "Simple int") count: Int,
+        ): String {
+            return "$name: ${wrapped.name} x $count"
+        }
+    }
+
+    @Nested
+    inner class ComplexTypeSchemaGeneration {
+
+        @Test
+        fun `schema for complex type parameter should include nested properties`() {
+            val tools = Tool.fromInstance(ComplexParameterTools())
+            val tool = tools.find { it.definition.name == "getInformation" }!!
+
+            val json = tool.definition.inputSchema.toJsonSchema()
+
+            // The schema should include the properties of WrappedType
+            assertTrue(json.contains("\"internalId\""), "Schema should contain internalId property: $json")
+            assertTrue(json.contains("\"name\""), "Schema should contain name property: $json")
+            assertTrue(json.contains("\"integer\""), "internalId should have integer type: $json")
+        }
+
+        @Test
+        fun `schema for address parameter should include all address properties`() {
+            val tools = Tool.fromInstance(ComplexParameterTools())
+            val tool = tools.find { it.definition.name == "processAddress" }!!
+
+            val json = tool.definition.inputSchema.toJsonSchema()
+
+            assertTrue(json.contains("\"street\""), "Schema should contain street property: $json")
+            assertTrue(json.contains("\"city\""), "Schema should contain city property: $json")
+            assertTrue(json.contains("\"zipCode\""), "Schema should contain zipCode property: $json")
+        }
+
+        @Test
+        fun `schema for nested complex types should include all levels`() {
+            val tools = Tool.fromInstance(ComplexParameterTools())
+            val tool = tools.find { it.definition.name == "handleNested" }!!
+
+            val json = tool.definition.inputSchema.toJsonSchema()
+
+            // Should have the wrapper's direct properties
+            assertTrue(json.contains("\"label\""), "Schema should contain label property: $json")
+            assertTrue(json.contains("\"address\""), "Schema should contain address property: $json")
+            // Should have nested address properties
+            assertTrue(json.contains("\"street\""), "Schema should contain nested street property: $json")
+            assertTrue(json.contains("\"city\""), "Schema should contain nested city property: $json")
+        }
+
+        @Test
+        fun `schema with mixed simple and complex params should handle both correctly`() {
+            val tools = Tool.fromInstance(ComplexParameterTools())
+            val tool = tools.find { it.definition.name == "mixedParams" }!!
+
+            val json = tool.definition.inputSchema.toJsonSchema()
+
+            // Simple params should be present
+            assertTrue(json.contains("\"name\""), "Schema should contain name param: $json")
+            assertTrue(json.contains("\"count\""), "Schema should contain count param: $json")
+            // Complex type's properties should also be present
+            assertTrue(json.contains("\"internalId\""), "Schema should contain wrapped type's internalId: $json")
+        }
+
+        @Test
+        fun `execution with complex type parameter should work correctly`() {
+            val tools = Tool.fromInstance(ComplexParameterTools())
+            val tool = tools.find { it.definition.name == "getInformation" }!!
+
+            val result = tool.call("""{"someType": {"internalId": 42, "name": "Test"}}""")
+
+            assertTrue(result is Tool.Result.Text)
+            assertEquals("ID: 42, Name: Test", (result as Tool.Result.Text).content)
+        }
+
+        @Test
+        fun `execution with nested complex type should work correctly`() {
+            val tools = Tool.fromInstance(ComplexParameterTools())
+            val tool = tools.find { it.definition.name == "handleNested" }!!
+
+            val result = tool.call("""{"wrapper": {"address": {"street": "123 Main", "city": "Boston", "zipCode": "02101"}, "label": "Home"}}""")
+
+            assertTrue(result is Tool.Result.Text)
+            assertEquals("Home: Boston", (result as Tool.Result.Text).content)
+        }
+    }
+
     @Nested
     inner class MethodToolExecution {
 
@@ -527,6 +723,145 @@ class ToolTest {
 
             assertTrue(result is Tool.Result.Text)
             assertEquals("Direct result", (result as Tool.Result.Text).content)
+        }
+    }
+
+    @Nested
+    inner class WithDescriptionTest {
+
+        @Test
+        fun `withDescription creates tool with new description`() {
+            val original = Tool.of(
+                name = "test",
+                description = "Original description",
+            ) { Tool.Result.text("result") }
+
+            val modified = original.withDescription("New description")
+
+            assertEquals("New description", modified.definition.description)
+            assertEquals("test", modified.definition.name)
+        }
+
+        @Test
+        fun `withDescription preserves tool functionality`() {
+            val original = Tool.of(
+                name = "test",
+                description = "Original description",
+            ) { Tool.Result.text("expected result") }
+
+            val modified = original.withDescription("New description")
+            val result = modified.call("{}")
+
+            assertTrue(result is Tool.Result.Text)
+            assertEquals("expected result", (result as Tool.Result.Text).content)
+        }
+
+        @Test
+        fun `withDescription preserves input schema`() {
+            val schema = Tool.InputSchema.of(
+                Tool.Parameter("param1", Tool.ParameterType.STRING, "A parameter"),
+            )
+            val original = Tool.of(
+                name = "test",
+                description = "Original description",
+                inputSchema = schema,
+            ) { Tool.Result.text("result") }
+
+            val modified = original.withDescription("New description")
+
+            assertEquals(1, modified.definition.inputSchema.parameters.size)
+            assertEquals("param1", modified.definition.inputSchema.parameters[0].name)
+        }
+
+        @Test
+        fun `withDescription preserves metadata`() {
+            val original = Tool.of(
+                name = "test",
+                description = "Original description",
+                metadata = Tool.Metadata(returnDirect = true),
+            ) { Tool.Result.text("result") }
+
+            val modified = original.withDescription("New description")
+
+            assertTrue(modified.metadata.returnDirect)
+        }
+
+        @Test
+        fun `withDescription result is DelegatingTool`() {
+            val original = Tool.of(
+                name = "test",
+                description = "Original description",
+            ) { Tool.Result.text("result") }
+
+            val modified = original.withDescription("New description")
+
+            assertTrue(modified is com.embabel.agent.spi.support.DelegatingTool)
+        }
+    }
+
+    @Nested
+    inner class WithNoteTest {
+
+        @Test
+        fun `withNote appends note to description`() {
+            val original = Tool.of(
+                name = "test",
+                description = "Original description",
+            ) { Tool.Result.text("result") }
+
+            val modified = original.withNote("Additional context")
+
+            assertEquals("Original description. Additional context", modified.definition.description)
+        }
+
+        @Test
+        fun `withNote preserves tool name`() {
+            val original = Tool.of(
+                name = "my_tool",
+                description = "Original description",
+            ) { Tool.Result.text("result") }
+
+            val modified = original.withNote("Note here")
+
+            assertEquals("my_tool", modified.definition.name)
+        }
+
+        @Test
+        fun `withNote preserves tool functionality`() {
+            val original = Tool.of(
+                name = "test",
+                description = "Original description",
+            ) { Tool.Result.text("expected result") }
+
+            val modified = original.withNote("Note")
+            val result = modified.call("{}")
+
+            assertTrue(result is Tool.Result.Text)
+            assertEquals("expected result", (result as Tool.Result.Text).content)
+        }
+
+        @Test
+        fun `withNote can be chained`() {
+            val original = Tool.of(
+                name = "test",
+                description = "Base",
+            ) { Tool.Result.text("result") }
+
+            val modified = original.withNote("Note 1").withNote("Note 2")
+
+            assertEquals("Base. Note 1. Note 2", modified.definition.description)
+        }
+
+        @Test
+        fun `withDescription and withNote can be combined`() {
+            val original = Tool.of(
+                name = "test",
+                description = "Original",
+            ) { Tool.Result.text("result") }
+
+            val modified = original.withDescription("New base").withNote("Additional info")
+
+            assertEquals("New base. Additional info", modified.definition.description)
         }
     }
 }

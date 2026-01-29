@@ -17,7 +17,8 @@ package com.embabel.agent.mcpserver
 
 import com.embabel.agent.api.common.LlmReference
 import com.embabel.agent.api.common.ToolObject
-import com.embabel.agent.core.support.safelyGetToolCallbacks
+import com.embabel.agent.core.support.safelyGetTools
+import com.embabel.agent.spi.support.springai.toSpringToolCallback
 import com.embabel.common.util.StringTransformer
 import com.embabel.common.util.loggerFor
 import org.springframework.ai.tool.ToolCallback
@@ -91,8 +92,8 @@ interface McpToolExport : McpExportToolCallbackPublisher {
                 )
             }
             return McpToolExportImpl(
-                toolCallbacks = safelyGetToolCallbacks(effectiveToolObjects)
-                    .map { decorate(it) },
+                toolCallbacks = safelyGetTools(effectiveToolObjects)
+                    .map { decorate(it.toSpringToolCallback()) },
             )
         }
 
@@ -115,7 +116,11 @@ interface McpToolExport : McpExportToolCallbackPublisher {
             llmReference: LlmReference,
             namingStrategy: StringTransformer = StringTransformer.IDENTITY,
         ): McpToolExport {
-            return fromToolObjects(listOf(llmReference.toolObject()), namingStrategy)
+            val toolObject = ToolObject(
+                objects = llmReference.tools(),
+                namingStrategy = llmReference.namingStrategy,
+            )
+            return fromToolObjects(listOf(toolObject), namingStrategy)
         }
 
         /**
@@ -132,7 +137,13 @@ interface McpToolExport : McpExportToolCallbackPublisher {
             llmReferences: List<LlmReference>,
             namingStrategy: StringTransformer = StringTransformer.IDENTITY,
         ): McpToolExport {
-            return fromToolObjects(llmReferences.map { it.toolObject() }, namingStrategy)
+            val toolObjects = llmReferences.map { ref ->
+                ToolObject(
+                    objects = ref.tools(),
+                    namingStrategy = ref.namingStrategy,
+                )
+            }
+            return fromToolObjects(toolObjects, namingStrategy)
         }
 
         private fun decorate(toolCallback: ToolCallback): ToolCallback {

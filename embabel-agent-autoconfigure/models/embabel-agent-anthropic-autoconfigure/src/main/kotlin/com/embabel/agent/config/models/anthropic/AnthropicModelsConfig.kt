@@ -16,12 +16,12 @@
 package com.embabel.agent.config.models.anthropic
 
 import com.embabel.agent.api.models.AnthropicModels
-import com.embabel.agent.api.models.OpenAiModels
+import com.embabel.agent.spi.LlmService
 import com.embabel.agent.spi.common.RetryProperties
+import com.embabel.agent.spi.support.springai.SpringAiLlmService
 import com.embabel.common.ai.autoconfig.LlmAutoConfigMetadataLoader
 import com.embabel.common.ai.autoconfig.ProviderInitialization
 import com.embabel.common.ai.autoconfig.RegisteredModel
-import com.embabel.common.ai.model.Llm
 import com.embabel.common.ai.model.LlmOptions
 import com.embabel.common.ai.model.OptionsConverter
 import com.embabel.common.ai.model.PerTokenPricingModel
@@ -41,7 +41,6 @@ import org.springframework.boot.context.properties.EnableConfigurationProperties
 import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Configuration
 import org.springframework.http.client.ClientHttpRequestFactory
-import org.springframework.http.client.SimpleClientHttpRequestFactory
 import org.springframework.web.client.RestClient
 import org.springframework.web.reactive.function.client.WebClient
 import java.time.LocalDate
@@ -111,7 +110,7 @@ class AnthropicModelsConfig(
 
     private val baseUrl: String? = envBaseUrl ?: properties.baseUrl
     private val apiKey: String = envApiKey ?: properties.apiKey
-        ?: error("Anthropic API key required: set ANTHROPIC_API_KEY env var or embabel.agent.platform.models.anthropic.api-key")
+    ?: error("Anthropic API key required: set ANTHROPIC_API_KEY env var or embabel.agent.platform.models.anthropic.api-key")
 
     init {
         logger.info("Anthropic models are available: {}", properties)
@@ -153,7 +152,7 @@ class AnthropicModelsConfig(
     /**
      * Creates an individual Anthropic model from configuration.
      */
-    private fun createAnthropicLlm(modelDef: AnthropicModelDefinition): Llm {
+    private fun createAnthropicLlm(modelDef: AnthropicModelDefinition): LlmService<*> {
         val chatModel = AnthropicChatModel
             .builder()
             .defaultOptions(createDefaultOptions(modelDef))
@@ -167,9 +166,9 @@ class AnthropicModelsConfig(
             .observationRegistry(observationRegistry.getIfUnique { ObservationRegistry.NOOP })
             .build()
 
-        return Llm(
+        return SpringAiLlmService(
             name = modelDef.modelId,
-            model = chatModel,
+            chatModel = chatModel,
             provider = AnthropicModels.PROVIDER,
             optionsConverter = AnthropicOptionsConverter,
             knowledgeCutoffDate = modelDef.knowledgeCutoffDate,
@@ -215,7 +214,7 @@ class AnthropicModelsConfig(
     private fun anthropicLlmOf(
         name: String,
         knowledgeCutoffDate: LocalDate?,
-    ): Llm {
+    ): LlmService<*> {
         val chatModel = AnthropicChatModel
             .builder()
             .defaultOptions(
@@ -233,9 +232,9 @@ class AnthropicModelsConfig(
             .observationRegistry(observationRegistry.getIfUnique { ObservationRegistry.NOOP })
             .build()
 
-        return Llm(
+        return SpringAiLlmService(
             name = name,
-            model = chatModel,
+            chatModel = chatModel,
             provider = AnthropicModels.PROVIDER,
             optionsConverter = AnthropicOptionsConverter,
             knowledgeCutoffDate = knowledgeCutoffDate,

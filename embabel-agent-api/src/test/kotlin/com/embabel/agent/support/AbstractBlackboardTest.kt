@@ -49,6 +49,7 @@ abstract class AbstractBlackboardTest {
                     IoBinding.DEFAULT_BINDING,
                     "AllOfTheAbove",
                     DataDictionary.fromClasses(
+                        "test",
                         AllOfTheAbove::class.java,
                         UserInput::class.java,
                         PersonWithReverseTool::class.java
@@ -67,6 +68,7 @@ abstract class AbstractBlackboardTest {
                     "AllOfTheAbove",
 
                     DataDictionary.fromClasses(
+                        "test",
                         AllOfTheAbove::class.java,
                         UserInput::class.java,
                         PersonWithReverseTool::class.java
@@ -84,6 +86,7 @@ abstract class AbstractBlackboardTest {
                 IoBinding.DEFAULT_BINDING,
                 "AllOfTheAbove",
                 DataDictionary.fromClasses(
+                    "test",
                     AllOfTheAbove::class.java,
                     UserInput::class.java,
                     PersonWithReverseTool::class.java
@@ -108,7 +111,7 @@ abstract class AbstractBlackboardTest {
                 bb.getValue(
                     IoBinding.DEFAULT_BINDING,
                     "Person",
-                    DataDictionary.fromClasses()
+                    DataDictionary.fromClasses("test")
                 )
             )
         }
@@ -120,7 +123,7 @@ abstract class AbstractBlackboardTest {
                 bb.getValue(
                     IoBinding.DEFAULT_BINDING,
                     "Person",
-                    DataDictionary.fromClasses(PersonWithReverseTool::class.java)
+                    DataDictionary.fromClasses("test", PersonWithReverseTool::class.java)
                 )
             )
         }
@@ -135,7 +138,7 @@ abstract class AbstractBlackboardTest {
                 bb.getValue(
                     IoBinding.DEFAULT_BINDING,
                     PersonWithReverseTool::class.java.simpleName,
-                    DataDictionary.fromClasses(PersonWithReverseTool::class.java)
+                    DataDictionary.fromClasses("test", PersonWithReverseTool::class.java)
                 )
             )
         }
@@ -150,7 +153,7 @@ abstract class AbstractBlackboardTest {
                 bb.getValue(
                     IoBinding.DEFAULT_BINDING,
                     "Dog",
-                    DataDictionary.fromClasses(Dog::class.java),
+                    DataDictionary.fromClasses("test", Dog::class.java),
                 )
             )
         }
@@ -165,7 +168,7 @@ abstract class AbstractBlackboardTest {
                 duke, bb.getValue(
                     IoBinding.DEFAULT_BINDING,
                     "Organism",
-                    DataDictionary.fromClasses(Dog::class.java)
+                    DataDictionary.fromClasses("test", Dog::class.java)
                 )
             )
         }
@@ -179,7 +182,7 @@ abstract class AbstractBlackboardTest {
                 duke, bb.getValue(
                     IoBinding.DEFAULT_BINDING,
                     "Animal",
-                    DataDictionary.fromClasses(Dog::class.java)
+                    DataDictionary.fromClasses("test", Dog::class.java)
                 )
             )
         }
@@ -193,7 +196,7 @@ abstract class AbstractBlackboardTest {
                 bb.getValue(
                     "person",
                     "Point",
-                    DataDictionary.fromClasses(PersonWithReverseTool::class.java, Point::class.java)
+                    DataDictionary.fromClasses("test", PersonWithReverseTool::class.java, Point::class.java)
                 )
             )
         }
@@ -215,7 +218,7 @@ abstract class AbstractBlackboardTest {
                 bb.getValue(
                     IoBinding.DEFAULT_BINDING,
                     PersonWithReverseTool::class.java.simpleName,
-                    DataDictionary.fromClasses(PersonWithReverseTool::class.java)
+                    DataDictionary.fromClasses("test", PersonWithReverseTool::class.java)
                 )
             )
 
@@ -227,7 +230,7 @@ abstract class AbstractBlackboardTest {
                 bb.getValue(
                     IoBinding.DEFAULT_BINDING,
                     PersonWithReverseTool::class.java.simpleName,
-                    DataDictionary.fromClasses(PersonWithReverseTool::class.java)
+                    DataDictionary.fromClasses("test", PersonWithReverseTool::class.java)
                 )
             )
         }
@@ -243,7 +246,7 @@ abstract class AbstractBlackboardTest {
                 duke, bb.getValue(
                     IoBinding.DEFAULT_BINDING,
                     "Dog",
-                    DataDictionary.fromClasses(Dog::class.java)
+                    DataDictionary.fromClasses("test", Dog::class.java)
                 )
             )
 
@@ -255,7 +258,7 @@ abstract class AbstractBlackboardTest {
                 bb.getValue(
                     IoBinding.DEFAULT_BINDING,
                     "Dog",
-                    DataDictionary.fromClasses(Dog::class.java)
+                    DataDictionary.fromClasses("test", Dog::class.java)
                 )
             )
         }
@@ -275,7 +278,7 @@ abstract class AbstractBlackboardTest {
             val retrieved = bb.getValue(
                 IoBinding.DEFAULT_BINDING,
                 PersonWithReverseTool::class.java.simpleName,
-                DataDictionary.fromClasses(PersonWithReverseTool::class.java)
+                DataDictionary.fromClasses("test", PersonWithReverseTool::class.java)
             )
             assertNotNull(retrieved)
             assertEquals(jane, retrieved)
@@ -300,7 +303,7 @@ abstract class AbstractBlackboardTest {
                 bb.getValue(
                     IoBinding.DEFAULT_BINDING,
                     "Dog",
-                    DataDictionary.fromClasses(Dog::class.java)
+                    DataDictionary.fromClasses("test", Dog::class.java)
                 )
             )
 
@@ -310,7 +313,7 @@ abstract class AbstractBlackboardTest {
                 bb.getValue(
                     IoBinding.DEFAULT_BINDING,
                     PersonWithReverseTool::class.java.simpleName,
-                    DataDictionary.fromClasses(PersonWithReverseTool::class.java)
+                    DataDictionary.fromClasses("test", PersonWithReverseTool::class.java)
                 )
             )
         }
@@ -328,6 +331,7 @@ abstract class AbstractBlackboardTest {
                 IoBinding.DEFAULT_BINDING,
                 "AllOfTheAbove",
                 DataDictionary.fromClasses(
+                    "test",
                     AllOfTheAbove::class.java,
                     UserInput::class.java,
                     PersonWithReverseTool::class.java
@@ -344,6 +348,7 @@ abstract class AbstractBlackboardTest {
                 IoBinding.DEFAULT_BINDING,
                 "AllOfTheAbove",
                 DataDictionary.fromClasses(
+                    "test",
                     AllOfTheAbove::class.java,
                     UserInput::class.java,
                     PersonWithReverseTool::class.java
@@ -365,7 +370,7 @@ abstract class AbstractBlackboardTest {
                 bb.getValue(
                     IoBinding.DEFAULT_BINDING,
                     PersonWithReverseTool::class.java.simpleName,
-                    DataDictionary.fromClasses(PersonWithReverseTool::class.java)
+                    DataDictionary.fromClasses("test", PersonWithReverseTool::class.java)
                 )
             )
         }
@@ -386,9 +391,100 @@ abstract class AbstractBlackboardTest {
                 bb.getValue(
                     IoBinding.DEFAULT_BINDING,
                     PersonWithReverseTool::class.java.simpleName,
-                    DataDictionary.fromClasses(PersonWithReverseTool::class.java)
+                    DataDictionary.fromClasses("test", PersonWithReverseTool::class.java)
                 )
             )
+        }
+    }
+
+    @Nested
+    inner class ProtectedBindings {
+
+        @Test
+        fun `protected binding survives clear`() {
+            val bb = createBlackboard()
+            val conversation = "important-conversation"
+            bb.bindProtected("conversation", conversation)
+            bb["other"] = "other-value"
+
+            bb.clear()
+
+            // Protected binding should survive
+            assertEquals(conversation, bb["conversation"])
+            // Non-protected binding should be cleared
+            assertNull(bb["other"])
+        }
+
+        @Test
+        fun `protected binding value survives clear in objects list`() {
+            val bb = createBlackboard()
+            val john = PersonWithReverseTool("John")
+            val jane = PersonWithReverseTool("Jane")
+            bb.bindProtected("protectedPerson", john)
+            bb += jane
+
+            bb.clear()
+
+            // Protected value should still be in objects
+            assertEquals(1, bb.objects.size)
+            assertEquals(john, bb.objects[0])
+        }
+
+        @Test
+        fun `multiple protected bindings survive clear`() {
+            val bb = createBlackboard()
+            val conv = "conversation"
+            val user = "user-123"
+            bb.bindProtected("conversation", conv)
+            bb.bindProtected("user", user)
+            bb["temp"] = "temporary"
+
+            bb.clear()
+
+            assertEquals(conv, bb["conversation"])
+            assertEquals(user, bb["user"])
+            assertNull(bb["temp"])
+        }
+
+        @Test
+        fun `clear with only protected bindings preserves all`() {
+            val bb = createBlackboard()
+            val conv = "conversation"
+            bb.bindProtected("conversation", conv)
+
+            bb.clear()
+
+            assertEquals(conv, bb["conversation"])
+            assertEquals(1, bb.objects.size)
+        }
+
+        @Test
+        fun `clear with no protected bindings clears all`() {
+            val bb = createBlackboard()
+            bb["a"] = "value-a"
+            bb["b"] = "value-b"
+
+            bb.clear()
+
+            assertNull(bb["a"])
+            assertNull(bb["b"])
+            assertEquals(0, bb.objects.size)
+        }
+
+        @Test
+        fun `spawn preserves protected status`() {
+            val bb = createBlackboard()
+            val conv = "conversation"
+            bb.bindProtected("conversation", conv)
+            bb["other"] = "other-value"
+
+            val spawned = bb.spawn()
+            spawned.clear()
+
+            // Protected binding should survive in spawned blackboard
+            assertEquals(conv, spawned["conversation"])
+            // Non-protected should be cleared
+            assertNull(spawned["other"])
         }
     }
 }

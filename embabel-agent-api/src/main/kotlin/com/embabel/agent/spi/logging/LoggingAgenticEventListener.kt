@@ -15,7 +15,33 @@
  */
 package com.embabel.agent.spi.logging
 
-import com.embabel.agent.api.event.*
+import com.embabel.agent.api.event.ActionExecutionResultEvent
+import com.embabel.agent.api.event.ActionExecutionStartEvent
+import com.embabel.agent.api.event.AgentDeploymentEvent
+import com.embabel.agent.api.event.AgentPlatformEvent
+import com.embabel.agent.api.event.AgentProcessCreationEvent
+import com.embabel.agent.api.event.AgentProcessEvent
+import com.embabel.agent.api.event.AgentProcessFinishedEvent
+import com.embabel.agent.api.event.AgentProcessPlanFormulatedEvent
+import com.embabel.agent.api.event.AgentProcessReadyToPlanEvent
+import com.embabel.agent.api.event.AgentProcessStuckEvent
+import com.embabel.agent.api.event.AgentProcessWaitingEvent
+import com.embabel.agent.api.event.AgenticEventListener
+import com.embabel.agent.api.event.DynamicAgentCreationEvent
+import com.embabel.agent.api.event.GoalAchievedEvent
+import com.embabel.agent.api.event.LlmRequestEvent
+import com.embabel.agent.api.event.LlmResponseEvent
+import com.embabel.agent.api.event.ObjectAddedEvent
+import com.embabel.agent.api.event.ObjectBoundEvent
+import com.embabel.agent.api.event.ProcessKilledEvent
+import com.embabel.agent.api.event.ProgressUpdateEvent
+import com.embabel.agent.api.event.RankingChoiceCouldNotBeMadeEvent
+import com.embabel.agent.api.event.RankingChoiceMadeEvent
+import com.embabel.agent.api.event.RankingChoiceRequestEvent
+import com.embabel.agent.api.event.ReplanRequestedEvent
+import com.embabel.agent.api.event.StateTransitionEvent
+import com.embabel.agent.api.event.ToolCallRequestEvent
+import com.embabel.agent.api.event.ToolCallResponseEvent
 import com.embabel.agent.core.AgentProcessStatusCode
 import com.embabel.agent.core.EarlyTermination
 import com.embabel.agent.spi.logging.personality.severance.LumonColorPalette
@@ -170,8 +196,19 @@ open class LoggingAgenticEventListener(
             .trimMargin()
             .indentLines(level = 1, skipIndentFirstLine = true)
 
-    protected open fun getStateTransitionEventMessage(e: StateTransitionEvent): String =
-        "[${e.processId}] transitioned to state: ${e.newState}"
+    protected open fun getStateTransitionEventMessage(e: StateTransitionEvent): String {
+        val stateTypeName = e.newState::class.java.simpleName
+        val prefix = "[${e.processId}]"
+        return when {
+            e.isInitialState -> "$prefix ENTERED STATE: $stateTypeName"
+            e.isSameInstance -> "$prefix STAYING IN STATE: $stateTypeName"
+            e.isSameType -> "$prefix RE-ENTERED STATE: $stateTypeName (new instance)"
+            else -> {
+                val previousTypeName = e.previousState!!::class.java.simpleName
+                "$prefix STATE TRANSITION: $previousTypeName -> $stateTypeName"
+            }
+        }
+    }
 
     protected open fun getEarlyTerminationMessage(e: EarlyTermination): String =
         "[${e.processId}] early termination by ${e.policy} for ${e.reason} - error=${e.error}"
@@ -226,13 +263,13 @@ open class LoggingAgenticEventListener(
         "[${e.processId}] object bound ${e.name}:${if (e.agentProcess.processContext.processOptions.verbosity.debug) e.value else e.value::class.java.simpleName}"
 
     protected open fun getLlmRequestEventMessage(e: LlmRequestEvent<*>): String =
-        "[${e.processId}] (${e.interaction.id.value}) using LLM ${e.llm.name}, creating ${e.outputClass.simpleName}: ${e.interaction.llm}"
+        "[${e.processId}] (${e.interaction.id.value}) using LLM ${e.llmMetadata.name}, creating ${e.outputClass.simpleName}: ${e.interaction.llm}"
 
     protected open fun getChatModelCallEventMessage(e: ChatModelCallEvent<*>): String {
-        val promptInfo = "using ${e.llm.name.color(colorPalette.highlight)}\n${
+        val promptInfo = "using ${e.llmMetadata.name.color(colorPalette.highlight)}\n${
             e.springAiPrompt.toInfoString().color(AnsiColor.GREEN)
         }\nprompt id: '${e.interaction.id}'\ntools: [\n${
-            e.interaction.toolCallbacks.joinToString("\n----\n") { it.toolDefinition.name() + ": " + it.toolDefinition.description() }
+            e.interaction.tools.joinToString("\n----\n") { it.definition.name + ": " + it.definition.description }
                 .color(colorPalette.highlight)
         }]"
         return "${e.processId} Spring AI ChatModel call:\n${promptInfo}"
@@ -381,6 +418,10 @@ open class LoggingAgenticEventListener(
 
             is ProcessKilledEvent -> {
                 logger.info("[${event.processId}] process killed")
+            }
+
+            is ReplanRequestedEvent -> {
+                logger.info("[${event.processId}] replanning requested: ${event.reason}")
             }
 
             else -> {

@@ -15,11 +15,16 @@
  */
 package com.embabel.agent.api.event
 
-import com.embabel.agent.core.*
-import com.embabel.agent.spi.LlmInteraction
-import com.embabel.agent.spi.support.springai.ChatModelCallEvent
+import com.embabel.agent.core.Action
+import com.embabel.agent.core.ActionInvocation
+import com.embabel.agent.core.ActionStatus
+import com.embabel.agent.core.AgentProcess
+import com.embabel.agent.core.AgentProcessStatusReport
+import com.embabel.agent.core.InProcess
+import com.embabel.agent.core.ToolGroupMetadata
+import com.embabel.agent.core.support.LlmInteraction
 import com.embabel.chat.Message
-import com.embabel.common.ai.model.Llm
+import com.embabel.common.ai.model.LlmMetadata
 import com.embabel.common.ai.model.LlmOptions
 import com.embabel.common.core.types.Timed
 import com.embabel.common.util.VisualizableTask
@@ -27,7 +32,6 @@ import com.embabel.plan.Goal
 import com.embabel.plan.Plan
 import com.embabel.plan.WorldState
 import com.fasterxml.jackson.annotation.JsonIgnore
-import org.springframework.ai.chat.prompt.Prompt
 import java.time.Duration
 import java.time.Instant
 
@@ -64,6 +68,11 @@ class AgentProcessReadyToPlanEvent(
     val worldState: WorldState,
 ) : AbstractAgentProcessEvent(agentProcess)
 
+class ReplanRequestedEvent(
+    agentProcess: AgentProcess,
+    val reason: String,
+) : AbstractAgentProcessEvent(agentProcess)
+
 class AgentProcessPlanFormulatedEvent(
     agentProcess: AgentProcess,
     val worldState: WorldState,
@@ -73,11 +82,23 @@ class AgentProcessPlanFormulatedEvent(
 /**
  * The agent process has transitioned to a new state.
  * @param newState the new state instance
+ * @param previousState the previous state instance, or null if this is the initial state
  */
 class StateTransitionEvent(
     agentProcess: AgentProcess,
     val newState: Any,
-) : AbstractAgentProcessEvent(agentProcess)
+    val previousState: Any? = null,
+) : AbstractAgentProcessEvent(agentProcess) {
+
+    /** True if this is the initial state entry (no previous state) */
+    val isInitialState: Boolean get() = previousState == null
+
+    /** True if staying in the same state instance (return this) */
+    val isSameInstance: Boolean get() = previousState === newState
+
+    /** True if transitioning to a new instance of the same state type */
+    val isSameType: Boolean get() = previousState != null && previousState.javaClass == newState.javaClass
+}
 
 class GoalAchievedEvent(
     agentProcess: AgentProcess,
@@ -185,25 +206,12 @@ class AgentProcessStuckEvent(
 
 class LlmRequestEvent<O>(
     agentProcess: AgentProcess,
-    action: Action?,
+    val action: Action?,
     val outputClass: Class<O>,
     val interaction: LlmInteraction,
-    val llm: Llm,
+    val llmMetadata: LlmMetadata,
     val messages: List<Message>,
 ) : AbstractAgentProcessEvent(agentProcess) {
-
-    /**
-     * Return a low level event showing Spring AI prompt details.
-     */
-    fun callEvent(springAiPrompt: Prompt): ChatModelCallEvent<O> {
-        return ChatModelCallEvent(
-            agentProcess = agentProcess,
-            outputClass = outputClass,
-            interaction = interaction,
-            llm = llm,
-            springAiPrompt = springAiPrompt
-        )
-    }
 
     fun responseEvent(
         response: O,
