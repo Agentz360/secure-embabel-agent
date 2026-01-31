@@ -13,14 +13,13 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package com.embabel.agent.spi.support.springai
+package com.embabel.agent.spi.support
 
 import com.embabel.agent.api.tool.Tool
 import com.embabel.agent.core.Action
 import com.embabel.agent.core.AgentProcess
 import com.embabel.agent.spi.ToolDecorator
 import com.embabel.agent.spi.ToolGroupResolver
-import com.embabel.agent.spi.support.*
 import com.embabel.common.ai.model.LlmOptions
 import com.embabel.common.util.StringTransformer
 import io.micrometer.observation.ObservationRegistry
@@ -31,7 +30,7 @@ import io.micrometer.observation.ObservationRegistry
 class DefaultToolDecorator(
     private val toolGroupResolver: ToolGroupResolver? = null,
     private val observationRegistry: ObservationRegistry? = null,
-    private val outputTransformer: StringTransformer = StringTransformer.IDENTITY,
+    private val outputTransformer: StringTransformer = StringTransformer.Companion.IDENTITY,
 ) : ToolDecorator {
 
     override fun decorate(
@@ -45,7 +44,7 @@ class DefaultToolDecorator(
             delegate = ExceptionSuppressingTool(
                 delegate = OutputTransformingTool(
                     delegate = ObservabilityTool(
-                        delegate = MetadataEnrichedTool(
+                        delegate = MetadataEnrichingTool(
                             delegate = tool,
                             toolGroupMetadata = toolGroup?.resolvedToolGroup?.metadata,
                         ).withEventPublication(

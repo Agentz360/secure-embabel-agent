@@ -16,6 +16,7 @@
 package com.embabel.agent.spi.support
 
 import com.embabel.agent.api.event.ToolCallRequestEvent
+import com.embabel.agent.api.tool.DelegatingTool
 import com.embabel.agent.api.tool.Tool
 import com.embabel.agent.core.Action
 import com.embabel.agent.core.AgentProcess
@@ -29,6 +30,22 @@ import io.micrometer.observation.Observation
 import io.micrometer.observation.ObservationRegistry
 import org.slf4j.LoggerFactory
 import java.time.Duration
+
+
+/**
+ * Unwrap a tool to find a specific type, or return null if not found.
+ */
+inline fun <reified T : Tool> Tool.unwrapAs(): T? {
+    var current = this
+    while (true) {
+        if (current is T) return current
+        if (current is DelegatingTool) {
+            current = current.delegate
+        } else {
+            return null
+        }
+    }
+}
 
 /**
  * Extension to get the content string from any Tool.Result variant.
@@ -120,7 +137,7 @@ class OutputTransformingTool(
 /**
  * Tool decorator that adds metadata about the tool group.
  */
-class MetadataEnrichedTool(
+class MetadataEnrichingTool(
     override val delegate: Tool,
     val toolGroupMetadata: ToolGroupMetadata?,
 ) : DelegatingTool {
@@ -136,7 +153,7 @@ class MetadataEnrichedTool(
             // to terminate the tool loop and trigger replanning
             throw e
         } catch (t: Throwable) {
-            loggerFor<MetadataEnrichedTool>().warn(
+            loggerFor<MetadataEnrichingTool>().warn(
                 "Tool call failure on ${delegate.definition.name}: input from LLM was <$input>",
                 t,
             )
@@ -167,7 +184,7 @@ class EventPublishingTool(
             action = action,
             llmOptions = llmOptions,
             tool = delegate.definition.name,
-            toolGroupMetadata = (delegate as? MetadataEnrichedTool)?.toolGroupMetadata,
+            toolGroupMetadata = (delegate as? MetadataEnrichingTool)?.toolGroupMetadata,
             toolInput = input,
         )
         val toolCallSchedule =
