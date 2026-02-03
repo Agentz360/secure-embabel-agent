@@ -3,13 +3,13 @@
     <modelVersion>4.0.0</modelVersion>
     <parent>
         <groupId>com.embabel.agent</groupId>
-        <artifactId>embabel-agent-autoconfigure</artifactId>
+        <artifactId>embabel-agent-starters</artifactId>
         <version>0.3.4-SNAPSHOT</version>
     </parent>
-    <artifactId>embabel-agent-shell-autoconfigure</artifactId>
+    <artifactId>embabel-agent-starter-webmvc</artifactId>
     <packaging>jar</packaging>
-    <name>Embabel Agent Shell AutoConfiguration</name>
-    <description>Spring Boot AutoConfiguration for Embabel Agent Shell</description>
+    <name>Embabel Agent WebMvc Starter</name>
+    <description>Embabel Agent Starter with MVC Controllers</description>
     <url>https://github.com/embabel/embabel-agent</url>
 
     <scm>
@@ -20,21 +20,16 @@
     </scm>
 
     <dependencies>
+        <!-- Base Starter -->
         <dependency>
             <groupId>com.embabel.agent</groupId>
-            <artifactId>embabel-agent-shell</artifactId>
+            <artifactId>embabel-agent-starter</artifactId>
         </dependency>
 
+        <!--  Web dependencies -->
         <dependency>
-            <groupId>org.springframework.boot</groupId>
-            <artifactId>spring-boot-starter-logging</artifactId>
-        </dependency>
-
-        <!-- Test Dependencies -->
-        <dependency>
-            <groupId>org.springframework.boot</groupId>
-            <artifactId>spring-boot-starter-test</artifactId>
-            <scope>test</scope>
+            <groupId>com.embabel.agent</groupId>
+            <artifactId>embabel-agent-webmvc</artifactId>
         </dependency>
     </dependencies>
 </project>
