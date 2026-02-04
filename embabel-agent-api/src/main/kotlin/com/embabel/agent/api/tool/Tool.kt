@@ -21,6 +21,8 @@ import com.embabel.agent.api.tool.Tool.Definition
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import org.slf4j.LoggerFactory
+import org.springframework.core.KotlinDetector
+import java.lang.reflect.Method
 import kotlin.reflect.KFunction
 import kotlin.reflect.full.findAnnotation
 import kotlin.reflect.full.functions
@@ -403,7 +405,34 @@ interface Tool : ToolInfo {
                     "Method ${method.name} is not annotated with @Tool.Method"
                 )
 
-            return MethodTool(
+            return KotlinMethodTool(
+                instance = instance,
+                method = method,
+                annotation = annotation,
+                objectMapper = objectMapper,
+            )
+        }
+
+        /**
+         * Create a Tool from a method annotated with [com.embabel.agent.api.annotation.LlmTool].
+         *
+         * @param instance The object instance containing the method
+         * @param method The method to wrap as a tool
+         * @param objectMapper ObjectMapper for JSON parsing (optional)
+         * @return A Tool that invokes the method
+         * @throws IllegalArgumentException if the method is not annotated with @Tool.Method
+         */
+        fun fromMethod(
+            instance: Any,
+            method: Method,
+            objectMapper: ObjectMapper = jacksonObjectMapper(),
+        ): Tool {
+            val annotation = method.getAnnotation(LlmTool::class.java)
+                ?: throw IllegalArgumentException(
+                    "Method ${method.name} is not annotated with @Tool.Method"
+                )
+
+            return JavaMethodTool(
                 instance = instance,
                 method = method,
                 annotation = annotation,
@@ -434,9 +463,15 @@ interface Tool : ToolInfo {
                 return listOf(MatryoshkaTool.fromInstance(instance, objectMapper))
             }
 
-            val tools = instance::class.functions
-                .filter { it.hasAnnotation<LlmTool>() }
-                .map { fromMethod(instance, it, objectMapper) }
+            val tools = if (KotlinDetector.isKotlinReflectPresent()) {
+                instance::class.functions
+                    .filter { it.hasAnnotation<LlmTool>() }
+                    .map { fromMethod(instance, it, objectMapper) }
+            } else {
+                instance.javaClass.methods
+                    .filter { it.isAnnotationPresent(LlmTool::class.java) }
+                    .map { fromMethod(instance, it, objectMapper) }
+            }
 
             if (tools.isEmpty()) {
                 throw IllegalArgumentException(
@@ -704,6 +739,15 @@ interface Tool : ToolInfo {
     }
 
     /**
+     * Create a new tool with a different name.
+     * Useful for namespacing tools when combining multiple tool sources.
+     *
+     * @param newName The new name to use
+     * @return A new Tool with the updated name
+     */
+    fun withName(newName: String): Tool = RenamedTool(this, newName)
+
+    /**
      * Create a new tool with a different description.
      * Useful for providing context-specific descriptions while keeping the same functionality.
      *
@@ -720,6 +764,27 @@ interface Tool : ToolInfo {
      * @return A new Tool with the note appended to its description
      */
     fun withNote(note: String): Tool = DescribedTool(this, "${definition.description}. $note")
+}
+
+/**
+ * A tool wrapper that overrides the name while delegating all functionality.
+ * Implements [DelegatingTool] to support unwrapping in injection strategies.
+ */
+private class RenamedTool(
+    override val delegate: Tool,
+    private val customName: String,
+) : DelegatingTool {
+
+    override val definition: Tool.Definition = Tool.Definition(
+        name = customName,
+        description = delegate.definition.description,
+        inputSchema = delegate.definition.inputSchema,
+    )
+
+    override val metadata: Tool.Metadata
+        get() = delegate.metadata
+
+    override fun call(input: String): Tool.Result = delegate.call(input)
 }
 
 /**
