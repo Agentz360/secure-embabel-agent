@@ -20,6 +20,25 @@ Each annotated method represents a distinct tool that will be exposed to the LLM
 
 A simple example of a tool method:
 
+[tabs]
+====
+Java::
++
+[source,java]
+----
+public class MathTools {
+
+    @LlmTool(description = "add two numbers")
+    public double add(double a, double b) {
+        return a + b;
+    }
+
+    // Other tools
+}
+----
+
+Kotlin::
++
 [source,kotlin]
 ----
 class MathTools {
@@ -28,7 +47,9 @@ class MathTools {
     fun add(a: Double, b: Double) = a + b
 
     // Other tools
+}
 ----
+====
 
 Classes implementing tools can be stateful.
 They are often domain objects.
@@ -58,14 +79,41 @@ You can obtain the current `AgentProcess` in a Tool method implementation via `A
 This enables tools to bind to the `AgentProcess`, making objects available to other actions.
 For example:
 
+[tabs]
+====
+Java::
++
 [source,java]
 ----
-
-@LlmTool(description="My Tool") String bindCustomer(Long id) {
-var customer = customerRepository.findById(id); var agentProcess = AgentProcess.get(); if (agentProcess != null) {
-agentProcess.addObject(customer); return "Customer bound to blackboard"; } return "No agent process: Unable to bind customer"; }
-
+@LlmTool(description = "My Tool")
+public String bindCustomer(Long id) {
+    var customer = customerRepository.findById(id);
+    var agentProcess = AgentProcess.get();
+    if (agentProcess != null) {
+        agentProcess.addObject(customer);
+        return "Customer bound to blackboard";
+    }
+    return "No agent process: Unable to bind customer";
+}
 ----
+
+Kotlin::
++
+[source,kotlin]
+----
+@LlmTool(description = "My Tool")
+fun bindCustomer(id: Long): String {
+    val customer = customerRepository.findById(id)
+    val agentProcess = AgentProcess.get()
+    return if (agentProcess != null) {
+        agentProcess.addObject(customer)
+        "Customer bound to blackboard"
+    } else {
+        "No agent process: Unable to bind customer"
+    }
+}
+----
+====
 
 [[reference.tools__tool-groups]]
 ==== Tool Groups
@@ -107,11 +155,53 @@ embabel:
 You can also use Spring's `@Configuration` and `@Bean` annotations to expose ToolGroups to the agent platform with greater control.
 The framework provides a default `ToolGroupsConfiguration` that demonstrates how to inject MCP servers and selectively expose MCP tools:
 
-[source,kotlin]
+[tabs]
+====
+Java::
++
+[source,java]
+----
+@Configuration
+public class ToolGroupsConfiguration {
+
+    private final List<McpSyncClient> mcpSyncClients;
+
+    public ToolGroupsConfiguration(List<McpSyncClient> mcpSyncClients) {
+        this.mcpSyncClients = mcpSyncClients;
+    }
+
+    @Bean
+    public MathTools mathToolGroup() {
+        return new MathTools();
+    }
+
+    @Bean
+    public ToolGroup mcpWebToolsGroup() { // <1>
+        return new McpToolGroup(
+            CoreToolGroups.WEB_DESCRIPTION,
+            "docker-web",
+            "Docker",
+            Set.of(ToolGroupPermission.INTERNET_ACCESS),
+            mcpSyncClients,
+            callback -> {
+                // Only expose specific web tools, exclude rate-limited ones
+                String name = callback.getToolDefinition().name();
+                return (name.contains("brave") || name.contains("fetch")) &&
+                       !name.contains("brave_local_search");
+            }
+        );
+    }
+}
 ----
 
-@Configuration class ToolGroupsConfiguration(
-    private val mcpSyncClients: List<McpSyncClient>) {
+Kotlin::
++
+[source,kotlin]
+----
+@Configuration
+class ToolGroupsConfiguration(
+    private val mcpSyncClients: List<McpSyncClient>
+) {
 
     @Bean
     fun mathToolGroup() = MathTools()
@@ -134,6 +224,7 @@ The framework provides a default `ToolGroupsConfiguration` that demonstrates how
     }
 }
 ----
+====
 
 <1> This method creates a Spring bean of type `ToolGroup`.
 This will automatically be picked up by the agent platform, allowing the tool group to be requested by name (role).
@@ -156,6 +247,10 @@ The `permissions` property declares what access the tool group requires (e.g., `
 
 Applications can implement their own `@Configuration` classes to expose custom tool groups, which can be backed by any service or resource, not just MCP.
 
+[tabs]
+====
+Java::
++
 [source,java]
 ----
 @Configuration
@@ -172,6 +267,24 @@ public class MyToolGroupsConfiguration {
     }
 }
 ----
+
+Kotlin::
++
+[source,kotlin]
+----
+@Configuration
+class MyToolGroupsConfiguration {
+
+    @Bean
+    fun databaseToolsGroup(dataSource: DataSource): ToolGroup =
+        DatabaseToolGroup(dataSource)
+
+    @Bean
+    fun emailToolsGroup(emailService: EmailService): ToolGroup =
+        EmailToolGroup(emailService)
+}
+----
+====
 
 This approach leverages Spring's dependency injection to provide tool groups with the services and resources they need, while maintaining clean separation of concerns between tool configuration and agent logic.
 
@@ -252,6 +365,28 @@ For example, "use web tools and generate search queries" clearly directs the LLM
 
 ===== Additional PromptRunner Examples
 
+[tabs]
+====
+Java::
++
+[source,java]
+----
+// Add tool groups to a specific prompt
+context.ai().withAutoLlm().withToolGroup(CoreToolGroups.WEB).create(
+    "Given the topic, generate a detailed report using web research.\n\n" +
+    "# Topic\n" +
+    reportRequest.getTopic()
+);
+
+// Add multiple tool groups
+context.ai().withDefaultLlm()
+    .withToolGroup(CoreToolGroups.WEB)
+    .withToolGroup(CoreToolGroups.MATH)
+    .createObject("Calculate stock performance with web data", StockReport.class);
+----
+
+Kotlin::
++
 [source,kotlin]
 ----
 // Add tool groups to a specific prompt
@@ -270,11 +405,16 @@ context.ai().withDefaultLlm()
     .withToolGroup(CoreToolGroups.MATH)
     .createObject("Calculate stock performance with web data", StockReport::class)
 ----
+====
 
 **Adding Tool Objects with @LlmTool Methods:**
 
 You can also provide domain objects with `@LlmTool` methods directly to specific prompts:
 
+[tabs]
+====
+Java::
++
 [source,java]
 ----
 context.ai()
@@ -286,11 +426,31 @@ context.ai()
 context.ai()
     .withDefaultLlm()
     .withToolObject(
+        new ToolObject(calculatorService)
+            .withNamingStrategy(name -> "calc_" + name)
+            .withFilter(methodName -> methodName.startsWith("compute"))
+    ).createObject("Perform calculations", Result.class);
+----
+
+Kotlin::
++
+[source,kotlin]
+----
+context.ai()
+    .withDefaultLlm()
+    .withToolObject(jokerTool)
+    .createObject("Create a UserInput object for fun", UserInput::class.java)
+
+// Add tool object with filtering and custom naming strategy
+context.ai()
+    .withDefaultLlm()
+    .withToolObject(
         ToolObject(calculatorService)
             .withNamingStrategy { "calc_$it" }
             .withFilter { methodName -> methodName.startsWith("compute") }
-    ).createObject("Perform calculations", Result.class);
+    ).createObject("Perform calculations", Result::class.java)
 ----
+====
 
 **Available PromptRunner Tool Methods:**
 
@@ -402,6 +562,108 @@ The `Tool.Parameter` class provides factory methods for common parameter types:
 - `Tool.Parameter.double(name, description)` - Floating-point parameter
 
 All factory methods default to `required = true`.
+
+===== Creating Strongly Typed Tools
+
+For tools with complex input and output structures, use `Tool.fromFunction()` to work with domain objects directly.
+The input schema is generated automatically from the input type, and JSON marshaling is handled for you.
+
+[tabs]
+====
+Java::
++
+[source,java]
+----
+// Define input and output types
+record AddRequest(int a, int b) {}
+record AddResult(int sum) {}
+
+// Create typed tool - schema is generated from AddRequest
+Tool addTool = Tool.fromFunction(
+    "add",
+    "Adds two numbers together",
+    AddRequest.class,
+    AddResult.class,
+    input -> new AddResult(input.a() + input.b())
+);
+
+// Call the tool - input is deserialized, output is serialized
+Tool.Result result = addTool.call("{\"a\": 5, \"b\": 3}");
+// Result contains: {"sum":8}
+
+// String output is returned directly (not double-serialized)
+Tool greetTool = Tool.fromFunction(
+    "greet",
+    "Greets someone",
+    GreetRequest.class,
+    String.class,
+    input -> "Hello " + input.name() + "!"
+);
+
+// With custom metadata
+Tool directTool = Tool.fromFunction(
+    "lookup",
+    "Looks up data directly",
+    LookupRequest.class,
+    LookupResult.class,
+    Tool.Metadata.create(true), // returnDirect = true
+    input -> new LookupResult(findData(input))
+);
+----
+
+Kotlin::
++
+[source,kotlin]
+----
+// Define input and output types
+data class AddRequest(val a: Int, val b: Int)
+data class AddResult(val sum: Int)
+
+// Create typed tool - uses reified types for cleaner syntax
+val addTool = Tool.fromFunction<AddRequest, AddResult>(
+    name = "add",
+    description = "Adds two numbers together",
+) { input -> AddResult(input.a + input.b) }
+
+// Call the tool - input is deserialized, output is serialized
+val result = addTool.call("""{"a": 5, "b": 3}""")
+// Result contains: {"sum":8}
+
+// String output is returned directly (not double-serialized)
+val greetTool = Tool.fromFunction<GreetRequest, String>(
+    name = "greet",
+    description = "Greets someone",
+) { input -> "Hello ${input.name}!" }
+
+// With custom metadata
+val directTool = Tool.fromFunction<LookupRequest, LookupResult>(
+    name = "lookup",
+    description = "Looks up data directly",
+    metadata = Tool.Metadata(returnDirect = true),
+) { input -> LookupResult(findData(input)) }
+----
+====
+
+You can also instantiate `TypedTool` directly:
+
+[source,kotlin]
+----
+val tool = TypedTool(
+    name = "add",
+    description = "Add two numbers",
+    inputType = AddRequest::class.java,
+    outputType = AddResult::class.java,
+) { input -> AddResult(input.a + input.b) }
+----
+
+Key features of typed tools:
+
+* **Automatic schema generation**: The input schema is derived from the input type's structure
+* **JSON marshaling**: Input JSON is deserialized to the input type, and output is serialized from the output type
+* **String pass-through**: If the output type is `String`, it's returned directly without JSON serialization
+* **Result pass-through**: If the function returns a `Tool.Result`, it's used as-is
+* **Exception handling**: Exceptions thrown by the function are converted to `Tool.Result.Error`
+* **Control flow signals**: Exceptions implementing `ToolControlFlowSignal` (like `ReplanRequestedException`) propagate through
 
 ===== Creating Tools from Annotated Methods
 
@@ -548,6 +810,24 @@ context.ai()
 
 Tools return `Tool.Result` which can be one of three types:
 
+[tabs]
+====
+Java::
++
+[source,java]
+----
+// Text result (most common)
+Tool.Result.text("The answer is 42");
+
+// Result with an artifact (e.g., generated file, image)
+Tool.Result.withArtifact("Generated report", reportBytes);
+
+// Error result
+Tool.Result.error("Failed to process request", exception);
+----
+
+Kotlin::
++
 [source,kotlin]
 ----
 // Text result (most common)
@@ -559,6 +839,7 @@ Tool.Result.withArtifact("Generated report", reportBytes)
 // Error result
 Tool.Result.error("Failed to process request", exception)
 ----
+====
 
 ===== Modifying Tool Descriptions
 
@@ -677,7 +958,10 @@ check(customized.call("{}").text == "42")
 |You're comfortable with Spring AI and want IDE support for tool annotations on domain objects
 
 |`Tool.create()` / `Tool.of()`
-|You need programmatic tool creation, want framework independence, or are creating tools dynamically
+|You need programmatic tool creation with simple inputs, want framework independence, or are creating tools dynamically
+
+|`Tool.fromFunction()`
+|You need programmatic tool creation with complex typed inputs and outputs, automatic JSON marshaling, and schema generation
 
 |`@LlmTool` / `@LlmTool.Param`
 |You prefer annotation-based tools but want Embabel's framework-agnostic abstractions
@@ -853,7 +1137,8 @@ This enables composition of agents and "handoff" patterns where one agent delega
 
 ===== Creating Subagents
 
-Subagent uses a fluent builder pattern. First select how to reference the agent, then specify the input type using `consuming()`:
+Subagent uses a fluent builder pattern.
+First select how to reference the agent, then specify the input type using `consuming()`:
 
 [tabs]
 ====
@@ -1001,6 +1286,10 @@ The input type you specify with `consuming()` determines the JSON schema that th
 
 For example:
 
+[tabs]
+====
+Java::
++
 [source,java]
 ----
 // The input type
@@ -1009,6 +1298,18 @@ public record WorksToFind(List<String> composers, String era, int maxResults) {}
 // Create the subagent with explicit input type
 Subagent.ofClass(PerformanceFinder.class).consuming(WorksToFind.class)
 ----
+
+Kotlin::
++
+[source,kotlin]
+----
+// The input type
+data class WorksToFind(val composers: List<String>, val era: String, val maxResults: Int)
+
+// Create the subagent with explicit input type
+Subagent.ofClass<PerformanceFinder>().consuming<WorksToFind>()
+----
+====
 
 The Subagent tool will:
 
@@ -1091,6 +1392,70 @@ Embabel provides three agentic tool implementations, each offering different lev
 |===
 
 All three implement the `AgenticTool` interface and share a common fluent API with `with*` methods.
+
+The `AgenticTool` interface defines:
+
+[tabs]
+====
+Java::
++
+[source,java]
+----
+public interface AgenticTool<THIS extends AgenticTool<THIS>> extends Tool {
+    LlmOptions getLlm();                              // LLM configuration
+    int getMaxIterations();                           // Max tool loop iterations (default: 20)
+
+    THIS withLlm(LlmOptions llm);
+    THIS withSystemPrompt(String prompt);
+    THIS withSystemPrompt(AgenticSystemPromptCreator creator);  // Dynamic prompt
+    THIS withMaxIterations(int maxIterations);
+    THIS withParameter(Tool.Parameter parameter);
+    THIS withToolObject(Object toolObject);
+}
+----
+
+Kotlin::
++
+[source,kotlin]
+----
+interface AgenticTool<THIS : AgenticTool<THIS>> : Tool {
+    val llm: LlmOptions                              // LLM configuration
+    val maxIterations: Int                           // Max tool loop iterations (default: 20)
+
+    fun withLlm(llm: LlmOptions): THIS
+    fun withSystemPrompt(prompt: String): THIS
+    fun withSystemPrompt(creator: AgenticSystemPromptCreator): THIS  // Dynamic prompt
+    fun withMaxIterations(maxIterations: Int): THIS
+    fun withParameter(parameter: Tool.Parameter): THIS
+    fun withToolObject(toolObject: Any): THIS
+}
+----
+====
+
+The `AgenticSystemPromptCreator` functional interface receives both the `ExecutingOperationContext` (for access to blackboard, process options, etc.) and the input string passed to the tool:
+
+[tabs]
+====
+Java::
++
+[source,java]
+----
+tool.withSystemPrompt((ctx, input) ->
+    "Context: " + ctx.getProcessContext().getProcessOptions().getContextId() +
+    ". Task: " + input
+);
+----
+
+Kotlin::
++
+[source,kotlin]
+----
+tool.withSystemPrompt { ctx, input ->
+    "Context: ${ctx.processContext.processOptions.contextId}" +
+    ". Task: $input"
+}
+----
+====
 
 IMPORTANT: For complex workflows with defined outputs, branching logic, loops, or state management, use Embabel's <<reference.planners,GOAP planner>>, <<reference.planners__utility,Utility AI>>, or <<reference.states,@State workflows>> instead.
 These provide deterministic, typesafe planning that is far more powerful and predictable than LLM-driven orchestration.
@@ -1644,10 +2009,10 @@ SimpleAgenticTool withAnnotatedTools = base.withToolObject(calculatorService);
 // Add tools from multiple objects
 SimpleAgenticTool withMultipleObjects = base.withToolObjects(searchService, calculatorService);
 
-// Dynamic system prompt based on AgentProcess context
-SimpleAgenticTool withDynamicPrompt = base.withSystemPromptCreator(agentProcess -> {
-    String userId = agentProcess.getBlackboard().get("userId", String.class);
-    return "Process requests for user " + userId + " using the available tools";
+// Dynamic system prompt based on execution context and input
+SimpleAgenticTool withDynamicPrompt = base.withSystemPrompt((ctx, input) -> {
+    String contextId = ctx.getProcessContext().getProcessOptions().getContextId().getId();
+    return "Process requests for context " + contextId + ". Task: " + input;
 });
 ----
 
@@ -1673,10 +2038,10 @@ val withAnnotatedTools = base.withToolObject(calculatorService)
 // Add tools from multiple objects
 val withMultipleObjects = base.withToolObjects(searchService, calculatorService)
 
-// Dynamic system prompt based on AgentProcess context
-val withDynamicPrompt = base.withSystemPromptCreator { agentProcess ->
-    val userId = agentProcess.blackboard.get("userId", String::class.java)
-    "Process requests for user $userId using the available tools"
+// Dynamic system prompt based on execution context and input
+val withDynamicPrompt = base.withSystemPrompt { ctx, input ->
+    val contextId = ctx.processContext.processOptions.contextId?.id
+    "Process requests for context $contextId. Task: $input"
 }
 ----
 ====
@@ -1689,8 +2054,11 @@ The available modification methods are:
 - `withToolObject(Any)`: Add tools from an object with `@LlmTool` methods
 - `withToolObjects(vararg Any)`: Add tools from multiple annotated objects
 - `withSystemPrompt(String)`: Set a fixed system prompt
-- `withSystemPromptCreator((AgentProcess) -> String)`: Set a dynamic prompt based on runtime context
+- `withSystemPrompt((ExecutingOperationContext, String) -> String)`: Set a dynamic prompt based on execution context and input
 - `withCaptureNestedArtifacts(Boolean)`: Control whether artifacts from nested agentic tool calls are captured (default: `false`)
+- `withDomainToolsFrom(Class<T>)`: Register a domain class whose `@LlmTool` methods become available when an artifact of that type is returned
+- `withDomainToolsFrom(Class<T>, DomainToolPredicate<T>)`: Register with a predicate to filter which instances contribute tools
+- `withAnyDomainTools()`: Auto-discover tools from any returned artifact with `@LlmTool` methods
 
 [[reference.tools__agentic-tools-artifact-capture]]
 ===== Controlling Artifact Capture in Nested Agentic Tools
@@ -1736,6 +2104,164 @@ val fullCapture = concertAssembler.withCaptureNestedArtifacts(true)
 
 IMPORTANT: This setting only affects artifacts from nested agentic tool calls.
 Artifacts from regular (non-agentic) tools are always captured.
+
+[[reference.tools__domain-tool-injection]]
+===== Dynamic Domain Tool Injection
+
+When working with domain objects, you often want to expose `@LlmTool` methods on those objects as tools—but only after the object has been retrieved.
+The `withDomainToolsFrom()` method enables this pattern.
+
+When you register a domain class, placeholder tools are created for each `@LlmTool` method on that class.
+Initially, these tools return "not available yet" messages.
+When a tool returns an artifact matching the registered type, the placeholder tools become active and delegate to the bound instance.
+
+**Last Wins Semantics**: When multiple artifacts of the same type are returned, only the most recent one's tools are active.
+This ensures the LLM always works with the "current" instance.
+
+[tabs]
+====
+Java::
++
+[source,java]
+----
+// Domain class with tool methods
+public class User {
+    private final String id;
+    private String email;
+
+    @LlmTool("Update the user's email address")
+    public String updateEmail(String newEmail) {
+        this.email = newEmail;
+        return "Email updated to " + newEmail;
+    }
+}
+
+// Create agentic tool with domain tool injection
+SimpleAgenticTool userManager = new SimpleAgenticTool("userManager", "Manage user accounts")
+    .withTools(searchUserTool, getUserTool)           // Tools to find/retrieve users
+    .withDomainToolsFrom(User.class);                 // User methods become tools when retrieved
+
+// Flow:
+// 1. LLM calls searchUserTool to find users
+// 2. LLM calls getUserTool which returns a User artifact
+// 3. updateEmail() becomes available as a tool bound to that User
+// 4. LLM calls updateEmail("new@example.com")
+----
+
+Kotlin::
++
+[source,kotlin]
+----
+// Domain class with tool methods
+class User(val id: String, var email: String) {
+    @LlmTool("Update the user's email address")
+    fun updateEmail(newEmail: String): String {
+        this.email = newEmail
+        return "Email updated to $newEmail"
+    }
+}
+
+// Create agentic tool with domain tool injection
+val userManager = SimpleAgenticTool("userManager", "Manage user accounts")
+    .withTools(searchUserTool, getUserTool)     // Tools to find/retrieve users
+    .withDomainToolsFrom<User>()                // User methods become tools when retrieved
+
+// Flow:
+// 1. LLM calls searchUserTool to find users
+// 2. LLM calls getUserTool which returns a User artifact
+// 3. updateEmail() becomes available as a tool bound to that User
+// 4. LLM calls updateEmail("new@example.com")
+----
+====
+
+====== Predicate-Based Filtering
+
+You can control which instances contribute tools using a predicate.
+The predicate receives the artifact and the current `AgentProcess`, allowing filtering based on object state or process context.
+
+[tabs]
+====
+Java::
++
+[source,java]
+----
+// Only expose tools for admin users
+SimpleAgenticTool adminManager = new SimpleAgenticTool("adminManager", "Manage admin users")
+    .withTools(searchUserTool, getUserTool)
+    .withDomainToolsFrom(User.class, (user, agentProcess) ->
+        user.getRole().equals("admin")
+    );
+
+// Regular users won't have their tools exposed
+// Only when an admin User is retrieved will updateEmail() become available
+----
+
+Kotlin::
++
+[source,kotlin]
+----
+// Only expose tools for admin users
+val adminManager = SimpleAgenticTool("adminManager", "Manage admin users")
+    .withTools(searchUserTool, getUserTool)
+    .withDomainToolsFrom<User> { user, _ ->
+        user.role == "admin"
+    }
+
+// Regular users won't have their tools exposed
+// Only when an admin User is retrieved will updateEmail() become available
+----
+====
+
+====== Auto-Discovery Mode
+
+For maximum flexibility, use `withAnyDomainTools()` to automatically discover and expose tools from any returned artifact that has `@LlmTool` methods.
+Unlike registered domain sources, auto-discovery replaces ALL previous bindings when a new artifact is discovered—ensuring only one "current" object's tools are active at a time.
+
+[tabs]
+====
+Java::
++
+[source,java]
+----
+// Auto-discover tools from any returned object
+SimpleAgenticTool explorer = new SimpleAgenticTool("explorer", "Explore and manipulate objects")
+    .withTools(searchTool, getTool)
+    .withAnyDomainTools();  // Tools from any returned object are exposed
+
+// Flow:
+// 1. LLM calls getTool which returns a User -> User tools are available
+// 2. LLM calls another getTool which returns an Order -> Order tools replace User tools
+// 3. Only the most recent object's tools are active
+----
+
+Kotlin::
++
+[source,kotlin]
+----
+// Auto-discover tools from any returned object
+val explorer = SimpleAgenticTool("explorer", "Explore and manipulate objects")
+    .withTools(searchTool, getTool)
+    .withAnyDomainTools()  // Tools from any returned object are exposed
+
+// Flow:
+// 1. LLM calls getTool which returns a User -> User tools are available
+// 2. LLM calls another getTool which returns an Order -> Order tools replace User tools
+// 3. Only the most recent object's tools are active
+----
+====
+
+This pattern is useful when:
+
+- **Domain objects have operations**: The object itself knows how to perform actions (e.g., `user.updateEmail()`, `order.cancel()`)
+- **Context-dependent tools**: Operations only make sense after retrieving a specific instance
+- **Clean API design**: Tools are defined on the domain class rather than as separate tool classes
+- **Exploratory workflows**: The LLM dynamically works with whatever object is "current"
+
+All agentic tool types support domain tool injection:
+
+- `SimpleAgenticTool`: Domain tools are available as soon as an artifact is returned
+- `PlaybookTool`: Domain tools are available immediately (not subject to unlock conditions)
+- `StateMachineTool`: Domain tools are available globally (not state-bound)
 
 [[reference.tools__artifact-filtering]]
 ===== Filtering Artifacts for Asset Tracking
@@ -1827,8 +2353,8 @@ Graduate to GOAP, Utility, or @State for production workflows where predictabili
 TIP: For supervisor-style orchestration with typed outputs and full blackboard state management, see <<reference.planners__supervisor-invocation,SupervisorInvocation>>.
 It operates at a higher level than agentic tools, orchestrating `@Action` methods rather than `Tool` instances, and produces typed goal objects with currying support.
 
-[[reference.tools__matryoshka]]
-==== MatryoshkaTool: Progressive Tool Disclosure
+[[reference.tools__progressive]]
+==== Progressive Tools
 
 [quote,Augustus De Morgan]
 ____
@@ -1838,19 +2364,29 @@ And the great fleas themselves, in turn, have greater fleas to go on; +
 While these again have greater still, and greater still, and so on.
 ____
 
-A `MatryoshkaTool` is a special tool that presents a high-level description to the LLM and, when invoked, exposes its inner tools.
-Named after Russian nesting dolls, this pattern enables *progressive tool disclosure* - presenting a simplified interface initially, then revealing more granular tools on demand.
+*Progressive tools* enable dynamic tool disclosure—presenting a simplified interface initially, then revealing more granular tools based on context or when the LLM expresses intent.
 
-===== When to Use MatryoshkaTool
+===== The Progressive Tool Hierarchy
 
-MatryoshkaTool is useful when:
+Embabel provides a hierarchy of progressive tool interfaces:
+
+* **`ProgressiveTool`**: The base interface for tools that can reveal inner tools based on context. Its `innerTools(process: AgentProcess)` method returns tools that may vary depending on the current agent process state.
+
+* **`UnfoldingTool`**: A `ProgressiveTool` with a fixed set of inner tools. When invoked, it "unfolds" to reveal its contents—like opening a folded map to see the details inside. This is the most commonly used progressive tool type.
+
+An `UnfoldingTool` presents a high-level description to the LLM and, when invoked, exposes its inner tools.
+This pattern is useful for *progressive tool disclosure*—reducing initial complexity while allowing access to detailed functionality on demand.
+
+===== When to Use UnfoldingTool
+
+UnfoldingTool is useful when:
 
 * You have many related tools that might overwhelm the LLM with choices
 * You want to group tools by category (e.g., "database operations", "file operations")
 * You want the LLM to express intent before revealing detailed options
 * You need to reduce token usage for tool descriptions
 
-===== Creating a Simple MatryoshkaTool
+===== Creating a Simple UnfoldingTool
 
 The simplest form exposes all inner tools when invoked:
 
@@ -1860,7 +2396,7 @@ Java::
 +
 [source,java]
 ----
-import com.embabel.agent.api.tool.MatryoshkaTool;
+import com.embabel.agent.api.tool.progressive.UnfoldingTool;
 import com.embabel.agent.api.tool.Tool;
 
 // Create inner tools
@@ -1879,8 +2415,8 @@ Tool deleteTool = Tool.create("delete_record", "Delete a record",
     input -> Tool.Result.text("{\"deleted\": true}")
 );
 
-// Create the MatryoshkaTool facade
-MatryoshkaTool databaseTool = MatryoshkaTool.of(
+// Create the UnfoldingTool facade
+var databaseTool = UnfoldingTool.of(
     "database_operations",
     "Use this tool to work with the database. Invoke to see specific operations.",
     List.of(queryTool, insertTool, deleteTool)
@@ -1891,7 +2427,7 @@ Kotlin::
 +
 [source,kotlin]
 ----
-import com.embabel.agent.api.tool.MatryoshkaTool
+import com.embabel.agent.api.tool.progressive.UnfoldingTool
 import com.embabel.agent.api.tool.Tool
 
 // Create inner tools
@@ -1913,14 +2449,63 @@ val deleteTool = Tool.of(
     inputSchema = Tool.InputSchema.of(Tool.Parameter.integer("id", "Record ID to delete"))
 ) { input -> Tool.Result.text("""{"deleted": true}""") }
 
-// Create the MatryoshkaTool facade
-val databaseTool = MatryoshkaTool.of(
+// Create the UnfoldingTool facade
+val databaseTool = UnfoldingTool.of(
     name = "database_operations",
     description = "Use this tool to work with the database. Invoke to see specific operations.",
     innerTools = listOf(queryTool, insertTool, deleteTool)
 )
 ----
 ====
+
+===== Fluent Builder API
+
+UnfoldingTool supports a fluent builder pattern for combining tools from multiple sources.
+Use `withTools()` to add individual tools or `withToolObject()` to add tools from `@LlmTool` annotated objects:
+
+[tabs]
+====
+Java::
++
+[source,java]
+----
+import com.embabel.agent.api.tool.progressive.UnfoldingTool;
+
+// Start with base tools and add more
+var combinedTools = UnfoldingTool.of(
+        "workspace",
+        "Workspace operations. Invoke to see available tools.",
+        List.of(baseTool))
+    .withTools(searchTool, filterTool)           // Add individual tools
+    .withToolObject(new DatabaseOperations())    // Add from @LlmTool class
+    .withToolObject(new FileOperations());       // Chain multiple sources
+----
+
+Kotlin::
++
+[source,kotlin]
+----
+import com.embabel.agent.api.tool.progressive.UnfoldingTool
+
+// Start with base tools and add more
+val combinedTools = UnfoldingTool.of(
+    name = "workspace",
+    description = "Workspace operations. Invoke to see available tools.",
+    innerTools = listOf(baseTool)
+)
+    .withTools(searchTool, filterTool)           // Add individual tools
+    .withToolObject(DatabaseOperations())        // Add from @LlmTool class
+    .withToolObject(FileOperations())            // Chain multiple sources
+----
+====
+
+This is useful when:
+
+* **Combining existing tools**: Merge tools from different sources into one progressive facade
+* **Adding ad-hoc tools**: Start with annotated tool classes and add programmatic tools
+* **Context-specific grouping**: Build different tool combinations for different invocation contexts
+
+The builder preserves all properties (`removeOnInvoke`, `childToolUsageNotes`) from the original UnfoldingTool.
 
 ===== Category-Based Tool Selection
 
@@ -1932,7 +2517,7 @@ Java::
 +
 [source,java]
 ----
-import com.embabel.agent.api.tool.MatryoshkaTool;
+import com.embabel.agent.api.tool.progressive.UnfoldingTool;
 import java.util.Map;
 
 // Define tools by category
@@ -1941,8 +2526,8 @@ Map<String, List<Tool>> toolsByCategory = Map.of(
     "write", List.of(writeFileTool, deleteFileTool, moveFileTool)
 );
 
-// Create category-based MatryoshkaTool
-MatryoshkaTool fileTool = MatryoshkaTool.byCategory(
+// Create category-based UnfoldingTool
+var fileTool = UnfoldingTool.byCategory(
     "file_operations",
     "File operations. Pass category: 'read' for reading files, 'write' for modifying files.",
     toolsByCategory
@@ -1957,7 +2542,7 @@ Kotlin::
 +
 [source,kotlin]
 ----
-import com.embabel.agent.api.tool.MatryoshkaTool
+import com.embabel.agent.api.tool.progressive.UnfoldingTool
 
 // Define tools by category
 val toolsByCategory = mapOf(
@@ -1965,8 +2550,8 @@ val toolsByCategory = mapOf(
     "write" to listOf(writeFileTool, deleteFileTool, moveFileTool)
 )
 
-// Create category-based MatryoshkaTool
-val fileTool = MatryoshkaTool.byCategory(
+// Create category-based UnfoldingTool
+val fileTool = UnfoldingTool.byCategory(
     name = "file_operations",
     description = "File operations. Pass category: 'read' for reading files, 'write' for modifying files.",
     toolsByCategory = toolsByCategory
@@ -1988,12 +2573,12 @@ Java::
 +
 [source,java]
 ----
-import com.embabel.agent.api.tool.MatryoshkaTool;
+import com.embabel.agent.api.tool.progressive.UnfoldingTool;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 List<Tool> allTools = List.of(basicTool, advancedTool, adminTool);
 
-MatryoshkaTool permissionBasedTool = MatryoshkaTool.selectable(
+var permissionBasedTool = UnfoldingTool.selectable(
     "api_operations",
     "API operations. Pass 'accessLevel': 'basic', 'advanced', or 'admin'.",
     allTools,
@@ -2025,12 +2610,12 @@ Kotlin::
 +
 [source,kotlin]
 ----
-import com.embabel.agent.api.tool.MatryoshkaTool
+import com.embabel.agent.api.tool.progressive.UnfoldingTool
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 
 val allTools = listOf(basicTool, advancedTool, adminTool)
 
-val permissionBasedTool = MatryoshkaTool.selectable(
+val permissionBasedTool = UnfoldingTool.selectable(
     name = "api_operations",
     description = "API operations. Pass 'accessLevel': 'basic', 'advanced', or 'admin'.",
     innerTools = allTools,
@@ -2054,7 +2639,7 @@ val permissionBasedTool = MatryoshkaTool.selectable(
 
 ===== Keeping the Facade Available
 
-By default, a MatryoshkaTool is removed after invocation (replaced by its inner tools).
+By default, a UnfoldingTool is removed after invocation (replaced by its inner tools).
 Set `removeOnInvoke = false` to keep the facade available for re-invocation with different arguments:
 
 [tabs]
@@ -2064,7 +2649,7 @@ Java::
 [source,java]
 ----
 // Facade stays available after invocation
-MatryoshkaTool persistentTool = MatryoshkaTool.of(
+var persistentTool = UnfoldingTool.of(
     "operations",
     "Operations. Invoke multiple times with different needs.",
     allTools,
@@ -2077,7 +2662,7 @@ Kotlin::
 [source,kotlin]
 ----
 // Facade stays available after invocation
-val persistentTool = MatryoshkaTool.of(
+val persistentTool = UnfoldingTool.of(
     name = "operations",
     description = "Operations. Invoke multiple times with different needs.",
     innerTools = allTools,
@@ -2086,10 +2671,10 @@ val persistentTool = MatryoshkaTool.of(
 ----
 ====
 
-===== Enabling MatryoshkaTool in the Tool Loop
+===== Enabling UnfoldingTool in the Tool Loop
 
-MatryoshkaTool is **enabled by default** when using Embabel's tool loop.
-The `ToolInjectionStrategy.DEFAULT` includes `MatryoshkaToolInjectionStrategy`, so no additional configuration is needed.
+UnfoldingTool is **enabled by default** when using Embabel's tool loop.
+The `ToolInjectionStrategy.DEFAULT` includes `UnfoldingToolInjectionStrategy`, so no additional configuration is needed.
 
 If you need to combine with custom strategies, use `ChainedToolInjectionStrategy`:
 
@@ -2101,9 +2686,9 @@ Java::
 ----
 import com.embabel.agent.spi.loop.ChainedToolInjectionStrategy;
 
-// Combine MatryoshkaTool support with custom strategies
+// Combine UnfoldingTool support with custom strategies
 ChainedToolInjectionStrategy combined =
-    ChainedToolInjectionStrategy.withMatryoshka(customStrategy1, customStrategy2);
+    ChainedToolInjectionStrategy.withUnfolding(customStrategy1, customStrategy2);
 ----
 
 Kotlin::
@@ -2112,16 +2697,16 @@ Kotlin::
 ----
 import com.embabel.agent.spi.loop.ChainedToolInjectionStrategy
 
-// Combine MatryoshkaTool support with custom strategies
-val combined = ChainedToolInjectionStrategy.withMatryoshka(customStrategy1, customStrategy2)
+// Combine UnfoldingTool support with custom strategies
+val combined = ChainedToolInjectionStrategy.withUnfolding(customStrategy1, customStrategy2)
 ----
 ====
 
-===== How MatryoshkaTool Works
+===== How UnfoldingToolWorks
 
 1. **Initial state**: The LLM sees only the facade tool (e.g., "database_operations")
 2. **LLM invokes**: The LLM calls the facade with optional arguments
-3. **Strategy evaluates**: `MatryoshkaToolInjectionStrategy` detects the invocation
+3. **Strategy evaluates**: `UnfoldingToolInjectionStrategy` detects the invocation
 4. **Tools replaced**: The facade is removed (if `removeOnInvoke` is true) and inner tools are added
 5. **Continue**: The LLM now sees and can use the specific inner tools
 
@@ -2129,7 +2714,7 @@ This flow reduces the initial tool set complexity while allowing the LLM to acce
 
 ===== Context Preservation and Usage Notes
 
-When a MatryoshkaTool is expanded, its child tools replace the facade.
+When a UnfoldingTool is expanded, its child tools replace the facade.
 Without context preservation, the LLM would lose important information about _why_ these tools are grouped together.
 
 For example, a "spotify_search" tool containing `vector_search`, `text_search`, and `regex_search` would expand to just three generic search tools - the LLM wouldn't know these are specifically for searching Spotify music data.
@@ -2150,7 +2735,7 @@ Java::
 +
 [source,java]
 ----
-MatryoshkaTool spotifySearch = MatryoshkaTool.of(
+var spotifySearch = UnfoldingTool.of(
     "spotify_search",
     "Search Spotify for music data including artists, albums, and tracks.",
     List.of(vectorSearchTool, textSearchTool, regexSearchTool),
@@ -2165,7 +2750,7 @@ Kotlin::
 +
 [source,kotlin]
 ----
-val spotifySearch = MatryoshkaTool.of(
+val spotifySearch = UnfoldingTool.of(
     name = "spotify_search",
     description = "Search Spotify for music data including artists, albums, and tracks.",
     innerTools = listOf(vectorSearchTool, textSearchTool, regexSearchTool),
@@ -2188,9 +2773,9 @@ After the LLM invokes `spotify_search`, it will see:
 The context tool's description includes the original purpose and available tools.
 When called, it returns full details about each child tool plus the usage notes - providing a single reference point without polluting individual tool descriptions.
 
-===== Annotation-Based MatryoshkaTool
+===== Annotation-Based UnfoldingTool
 
-For a more declarative approach, use the `@MatryoshkaTools` class annotation combined with `@LlmTool` method annotations:
+For a more declarative approach, use the `@UnfoldingTools` class annotation combined with `@LlmTool` method annotations:
 
 [tabs]
 ====
@@ -2198,10 +2783,10 @@ Java::
 +
 [source,java]
 ----
-import com.embabel.agent.api.annotation.MatryoshkaTools;
+import com.embabel.agent.api.annotation.UnfoldingTools;
 import com.embabel.agent.api.annotation.LlmTool;
 
-@MatryoshkaTools(
+@UnfoldingTools(
     name = "database_operations",
     description = "Database operations. Invoke to see specific tools."
 )
@@ -2223,18 +2808,18 @@ public class DatabaseTools {
     }
 }
 
-// Create the MatryoshkaTool from the annotated class
-MatryoshkaTool tool = MatryoshkaTool.fromInstance(new DatabaseTools());
+// Create the UnfoldingTool from the annotated class
+var tool = UnfoldingTool.fromInstance(new DatabaseTools());
 ----
 
 Kotlin::
 +
 [source,kotlin]
 ----
-import com.embabel.agent.api.annotation.MatryoshkaTools
+import com.embabel.agent.api.annotation.UnfoldingTools
 import com.embabel.agent.api.annotation.LlmTool
 
-@MatryoshkaTools(
+@UnfoldingTools(
     name = "database_operations",
     description = "Database operations. Invoke to see specific tools."
 )
@@ -2256,8 +2841,8 @@ class DatabaseTools {
     }
 }
 
-// Create the MatryoshkaTool from the annotated class
-val tool = MatryoshkaTool.fromInstance(DatabaseTools())
+// Create the UnfoldingTool from the annotated class
+val tool = UnfoldingTool.fromInstance(DatabaseTools())
 ----
 ====
 
@@ -2269,7 +2854,7 @@ Java::
 +
 [source,java]
 ----
-@MatryoshkaTools(
+@UnfoldingTools(
     name = "music_search",
     description = "Search music database for artists, albums, and tracks",
     childToolUsageNotes = "Try vector search first for semantic queries. " +
@@ -2293,7 +2878,7 @@ Kotlin::
 +
 [source,kotlin]
 ----
-@MatryoshkaTools(
+@UnfoldingTools(
     name = "music_search",
     description = "Search music database for artists, albums, and tracks",
     childToolUsageNotes = "Try vector search first for semantic queries. " +
@@ -2316,7 +2901,7 @@ class MusicSearchTools {
 
 ===== Category-Based Selection with Annotations
 
-Add `category` to `@LlmTool` annotations to automatically create a category-based MatryoshkaTool:
+Add `category` to `@LlmTool` annotations to automatically create a category-based UnfoldingTool:
 
 [tabs]
 ====
@@ -2324,7 +2909,7 @@ Java::
 +
 [source,java]
 ----
-@MatryoshkaTools(
+@UnfoldingTools(
     name = "file_operations",
     description = "File operations. Pass category: 'read' or 'write'."
 )
@@ -2352,7 +2937,7 @@ public class FileTools {
 }
 
 // Automatically creates category-based selection
-MatryoshkaTool tool = MatryoshkaTool.fromInstance(new FileTools());
+var tool = UnfoldingTool.fromInstance(new FileTools());
 // When invoked with {"category": "read"}, only read tools are exposed
 // When invoked with {"category": "write"}, only write tools are exposed
 ----
@@ -2361,7 +2946,7 @@ Kotlin::
 +
 [source,kotlin]
 ----
-@MatryoshkaTools(
+@UnfoldingTools(
     name = "file_operations",
     description = "File operations. Pass category: 'read' or 'write'."
 )
@@ -2385,13 +2970,13 @@ class FileTools {
 }
 
 // Automatically creates category-based selection
-val tool = MatryoshkaTool.fromInstance(FileTools())
+val tool = UnfoldingTool.fromInstance(FileTools())
 // When invoked with {"category": "read"}, only read tools are exposed
 // When invoked with {"category": "write"}, only write tools are exposed
 ----
 ====
 
-===== @MatryoshkaTools Annotation Attributes
+===== @UnfoldingTools Annotation Attributes
 
 |===
 |Attribute |Type |Default |Description
@@ -2419,19 +3004,23 @@ val tool = MatryoshkaTool.fromInstance(FileTools())
 
 ===== @LlmTool Category Attribute
 
-The `category` attribute on `@LlmTool` is used when the containing class has `@MatryoshkaTools`:
+The `category` attribute on `@LlmTool` is used when the containing class has `@UnfoldingTools`:
 
 - Tools with the same category are grouped together
 - Tools without a category are added to all category groups plus an "all" category
-- If no tools have categories, a simple (non-category-based) MatryoshkaTool is created
+- If no tools have categories, a simple (non-category-based) UnfoldingTool is created
 
 ===== Real-World Example: Spotify Integration
 
-Here's a real-world example from the Impromptu chatbot that uses `@MatryoshkaTools` to progressively disclose Spotify functionality:
+Here's a real-world example from the Impromptu chatbot that uses `@UnfoldingTools` to progressively disclose Spotify functionality:
 
+[tabs]
+====
+Java::
++
 [source,java]
 ----
-@MatryoshkaTools(
+@UnfoldingTools(
     name = "spotify",
     description = "Access Spotify music features. Invoke this tool to enable Spotify " +
             "operations like playing music, searching tracks, managing playlists, " +
@@ -2458,6 +3047,38 @@ public record SpotifyTools(ImpromptuUser user, SpotifyService spotifyService) {
 }
 ----
 
+Kotlin::
++
+[source,kotlin]
+----
+@UnfoldingTools(
+    name = "spotify",
+    description = "Access Spotify music features. Invoke this tool to enable Spotify " +
+            "operations like playing music, searching tracks, managing playlists, " +
+            "and controlling playback."
+)
+data class SpotifyTools(val user: ImpromptuUser, val spotifyService: SpotifyService) {
+
+    @LlmTool(description = "Check if user has linked their Spotify account")
+    fun checkSpotifyStatus(): String { /* ... */ }
+
+    @LlmTool(description = "Get the user's Spotify playlists")
+    fun getPlaylists(): String { /* ... */ }
+
+    @LlmTool(description = "Search for tracks on Spotify by song name, artist, or both")
+    fun searchTracks(query: String): String { /* ... */ }
+
+    @LlmTool(description = "Play a track on Spotify by searching for it")
+    fun playTrack(query: String): String { /* ... */ }
+
+    @LlmTool(description = "Pause the current Spotify playback")
+    fun pausePlayback(): String { /* ... */ }
+
+    // ... more tools
+}
+----
+====
+
 With this setup:
 
 1. The LLM initially sees a single `spotify` tool
@@ -2467,33 +3088,7 @@ With this setup:
 
 ===== Auto-Detection with Tool.fromInstance()
 
-When you use `Tool.fromInstance()` on a class annotated with `@MatryoshkaTools`, it automatically creates a `MatryoshkaTool`:
-
-[source,java]
-----
-// Auto-detects @MatryoshkaTools and creates a MatryoshkaTool
-List<Tool> tools = Tool.fromInstance(new SpotifyTools(user, service));
-// Returns a single MatryoshkaTool, not individual tools
-----
-
-This works seamlessly with `withToolObject()` on PromptRunner:
-
-[source,java]
-----
-context.ai()
-    .withToolObject(new SpotifyTools(user, spotifyService))
-    .respond("Play some classical music");
-// The SpotifyTools are automatically exposed as a single MatryoshkaTool facade
-----
-
-===== Nested MatryoshkaTools
-
-MatryoshkaTools can be nested for multi-level progressive disclosure.
-This enables organizing large tool collections into logical hierarchies where the LLM navigates by invoking facade tools.
-
-====== Programmatic Nesting
-
-Use `MatryoshkaTool.of()` to create nested hierarchies programmatically:
+When you use `Tool.fromInstance()` on a class annotated with `@UnfoldingTools`, it automatically creates an `UnfoldingTool`:
 
 [tabs]
 ====
@@ -2501,22 +3096,77 @@ Java::
 +
 [source,java]
 ----
-// Inner matryoshka for user management
-MatryoshkaTool userManagement = MatryoshkaTool.of(
+// Auto-detects @UnfoldingTools and creates an UnfoldingTool
+List<Tool> tools = Tool.fromInstance(new SpotifyTools(user, service));
+// Returns a single UnfoldingTool, not individual tools
+----
+
+Kotlin::
++
+[source,kotlin]
+----
+// Auto-detects @UnfoldingTools and creates an UnfoldingTool
+val tools = Tool.fromInstance(SpotifyTools(user, service))
+// Returns a single UnfoldingTool, not individual tools
+----
+====
+
+This works seamlessly with `withToolObject()` on PromptRunner:
+
+[tabs]
+====
+Java::
++
+[source,java]
+----
+context.ai()
+    .withToolObject(new SpotifyTools(user, spotifyService))
+    .respond("Play some classical music");
+// The SpotifyTools are automatically exposed as a single UnfoldingTool facade
+----
+
+Kotlin::
++
+[source,kotlin]
+----
+context.ai()
+    .withToolObject(SpotifyTools(user, spotifyService))
+    .respond("Play some classical music")
+// The SpotifyTools are automatically exposed as a single UnfoldingTool facade
+----
+====
+
+===== Nested UnfoldingTools
+
+UnfoldingTools can be nested for multi-level progressive disclosure.
+This enables organizing large tool collections into logical hierarchies where the LLM navigates by invoking facade tools.
+
+====== Programmatic Nesting
+
+Use `UnfoldingTool.of()` to create nested hierarchies programmatically:
+
+[tabs]
+====
+Java::
++
+[source,java]
+----
+// Inner UnfoldingTool for user management
+var userManagement = UnfoldingTool.of(
     "user_management",
     "User management operations",
     List.of(createUserTool, deleteUserTool, updateUserTool)
 );
 
-// Inner matryoshka for system config
-MatryoshkaTool systemConfig = MatryoshkaTool.of(
+// Inner UnfoldingTool for system config
+var systemConfig = UnfoldingTool.of(
     "system_config",
     "System configuration operations",
     List.of(updateConfigTool, backupTool, restoreTool)
 );
 
-// Outer matryoshka containing both
-MatryoshkaTool adminTool = MatryoshkaTool.of(
+// Outer UnfoldingTool containing both
+var adminTool = UnfoldingTool.of(
     "admin_operations",
     "Administrative operations. Invoke to see categories.",
     List.of(userManagement, systemConfig)
@@ -2532,22 +3182,22 @@ Kotlin::
 +
 [source,kotlin]
 ----
-// Inner matryoshka for user management
-val userManagement = MatryoshkaTool.of(
+// Inner UnfoldingTool for user management
+val userManagement = UnfoldingTool.of(
     name = "user_management",
     description = "User management operations",
     innerTools = listOf(createUserTool, deleteUserTool, updateUserTool)
 )
 
-// Inner matryoshka for system config
-val systemConfig = MatryoshkaTool.of(
+// Inner UnfoldingTool for system config
+val systemConfig = UnfoldingTool.of(
     name = "system_config",
     description = "System configuration operations",
     innerTools = listOf(updateConfigTool, backupTool, restoreTool)
 )
 
-// Outer matryoshka containing both
-val adminTool = MatryoshkaTool.of(
+// Outer UnfoldingTool containing both
+val adminTool = UnfoldingTool.of(
     name = "admin_operations",
     description = "Administrative operations. Invoke to see categories.",
     innerTools = listOf(userManagement, systemConfig)
@@ -2562,8 +3212,8 @@ val adminTool = MatryoshkaTool.of(
 
 ====== Annotation-Based Nesting with Inner Classes
 
-You can also create nested hierarchies using `@MatryoshkaTools` annotations on inner classes.
-When `MatryoshkaTool.fromInstance()` is called, it automatically discovers and includes any nested inner classes that are also annotated with `@MatryoshkaTools`:
+You can also create nested hierarchies using `@UnfoldingTools` annotations on inner classes.
+When `UnfoldingTool.fromInstance()` is called, it automatically discovers and includes any nested inner classes that are also annotated with `@UnfoldingTools`:
 
 [tabs]
 ====
@@ -2571,7 +3221,7 @@ Java::
 +
 [source,java]
 ----
-@MatryoshkaTools(
+@UnfoldingTools(
     name = "admin_operations",
     description = "Administrative operations. Invoke to access specific areas."
 )
@@ -2582,8 +3232,8 @@ public class AdminTools {
         return "System is healthy";
     }
 
-    // Nested inner class - automatically discovered and included as a nested MatryoshkaTool
-    @MatryoshkaTools(
+    // Nested inner class - automatically discovered and included as a nested UnfoldingTool
+    @UnfoldingTools(
         name = "user_management",
         description = "User management operations. Invoke to see specific tools."
     )
@@ -2596,7 +3246,7 @@ public class AdminTools {
         public String deleteUser(String username) { return "Deleted user: " + username; }
 
         // Can nest even deeper
-        @MatryoshkaTools(
+        @UnfoldingTools(
             name = "user_permissions",
             description = "User permission operations"
         )
@@ -2610,7 +3260,7 @@ public class AdminTools {
         }
     }
 
-    @MatryoshkaTools(
+    @UnfoldingTools(
         name = "system_config",
         description = "System configuration. Invoke to see config tools."
     )
@@ -2625,7 +3275,7 @@ public class AdminTools {
 }
 
 // Create the full nested hierarchy automatically
-MatryoshkaTool adminTool = MatryoshkaTool.fromInstance(new AdminTools());
+var adminTool = UnfoldingTool.fromInstance(new AdminTools());
 
 // Flow:
 // 1. LLM sees: admin_operations
@@ -2638,7 +3288,7 @@ Kotlin::
 +
 [source,kotlin]
 ----
-@MatryoshkaTools(
+@UnfoldingTools(
     name = "admin_operations",
     description = "Administrative operations. Invoke to access specific areas."
 )
@@ -2647,8 +3297,8 @@ class AdminTools {
     @LlmTool(description = "Get system status")
     fun getStatus(): String = "System is healthy"
 
-    // Nested inner class - automatically discovered and included as a nested MatryoshkaTool
-    @MatryoshkaTools(
+    // Nested inner class - automatically discovered and included as a nested UnfoldingTool
+    @UnfoldingTools(
         name = "user_management",
         description = "User management operations. Invoke to see specific tools."
     )
@@ -2661,7 +3311,7 @@ class AdminTools {
         fun deleteUser(username: String): String = "Deleted user: $username"
 
         // Can nest even deeper
-        @MatryoshkaTools(
+        @UnfoldingTools(
             name = "user_permissions",
             description = "User permission operations"
         )
@@ -2675,7 +3325,7 @@ class AdminTools {
         }
     }
 
-    @MatryoshkaTools(
+    @UnfoldingTools(
         name = "system_config",
         description = "System configuration. Invoke to see config tools."
     )
@@ -2690,7 +3340,7 @@ class AdminTools {
 }
 
 // Create the full nested hierarchy automatically
-val adminTool = MatryoshkaTool.fromInstance(AdminTools())
+val adminTool = UnfoldingTool.fromInstance(AdminTools())
 
 // Flow:
 // 1. LLM sees: admin_operations
@@ -2703,13 +3353,13 @@ val adminTool = MatryoshkaTool.fromInstance(AdminTools())
 This approach provides several benefits:
 
 * **Encapsulation**: All related tools are organized in a single class hierarchy
-* **Automatic discovery**: No manual wiring - inner classes with `@MatryoshkaTools` are automatically included
+* **Automatic discovery**: No manual wiring - inner classes with `@UnfoldingTools` are automatically included
 * **Arbitrary depth**: Nest as many levels as needed to organize your tools logically
-* **Mixed content**: Each level can have both direct `@LlmTool` methods and nested `@MatryoshkaTools` classes
+* **Mixed content**: Each level can have both direct `@LlmTool` methods and nested `@UnfoldingTools` classes
 
 ===== Dynamically Configured Inner Tools
 
-A powerful pattern with `MatryoshkaTool.selectable()` is creating inner tools that are *configured* based on the parameters passed when invoking the facade.
+A powerful pattern with `UnfoldingTool.selectable()` is creating inner tools that are *configured* based on the parameters passed when invoking the facade.
 The selector function can create new tool instances with captured state, connection strings, or other configuration:
 
 [tabs]
@@ -2718,8 +3368,8 @@ Java::
 +
 [source,java]
 ----
-// MatryoshkaTool that configures database tools based on connection parameter
-MatryoshkaTool databaseTool = MatryoshkaTool.selectable(
+// UnfoldingTool that configures database tools based on connection parameter
+var databaseTool = UnfoldingTool.selectable(
     "database",
     "Database operations. Pass 'connection' to configure tools.",
     Collections.emptyList(),  // Tools created dynamically
@@ -2754,8 +3404,8 @@ Kotlin::
 +
 [source,kotlin]
 ----
-// MatryoshkaTool that configures database tools based on connection parameter
-val databaseTool = MatryoshkaTool.selectable(
+// UnfoldingTool that configures database tools based on connection parameter
+val databaseTool = UnfoldingTool.selectable(
     name = "database",
     description = "Database operations. Pass 'connection' to configure tools.",
     innerTools = emptyList(),  // Tools created dynamically
@@ -2800,7 +3450,7 @@ Java::
 +
 [source,java]
 ----
-MatryoshkaTool cartTool = MatryoshkaTool.selectable(
+var cartTool = UnfoldingTool.selectable(
     "shopping_cart",
     "Shopping cart. Pass 'cart_id' to select which cart to operate on.",
     Collections.emptyList(),
@@ -2839,7 +3489,7 @@ Kotlin::
 +
 [source,kotlin]
 ----
-val cartTool = MatryoshkaTool.selectable(
+val cartTool = UnfoldingTool.selectable(
     name = "shopping_cart",
     description = "Shopping cart. Pass 'cart_id' to select which cart to operate on.",
     innerTools = emptyList(),
@@ -2878,35 +3528,41 @@ val cartTool = MatryoshkaTool.selectable(
 
 Other agent frameworks address large tool collections with different approaches, each with trade-offs:
 
-* **Anthropic's Tool Search Tool**: Uses a `defer_loading: true` flag to prevent tools from being loaded upfront. Tools are discovered via a separate "Tool Search Tool" that searches tool metadata. This requires maintaining searchable tool descriptions and adds latency for each discovery step.
+* **Anthropic's Tool Search Tool**: Uses a `defer_loading: true` flag to prevent tools from being loaded upfront.
+Tools are discovered via a separate "Tool Search Tool" that searches tool metadata.
+This requires maintaining searchable tool descriptions and adds latency for each discovery step.
 
-* **LangGraph Dynamic Tool Calling**: Uses vector stores and semantic search to select relevant tools based on the user's query. This requires embedding infrastructure, vector database setup, and careful tuning of similarity thresholds.
+* **LangGraph Dynamic Tool Calling**: Uses vector stores and semantic search to select relevant tools based on the user's query.
+This requires embedding infrastructure, vector database setup, and careful tuning of similarity thresholds.
 
-* **Google ADK AgentTool**: Uses sub-agents that recursively delegate to other agents, each potentially having their own tool sets. Tool discovery is implicit through the agent hierarchy.
+* **Google ADK AgentTool**: Uses sub-agents that recursively delegate to other agents, each potentially having their own tool sets.
+Tool discovery is implicit through the agent hierarchy.
 
-* **LangChain4j ToolProvider**: Provides a `ToolProvider` interface for dynamic tool selection, but it works _before_ the LLM call by analyzing the incoming user message. For example, "if the message contains 'booking', include booking tools." This is pre-filtering based on message content, not progressive disclosure through tool invocation. LangChain4j's documentation also suggests embedding-based classification, RAG over tool descriptions, or two-pass LLM selection—all requiring additional infrastructure or extra LLM calls.
+* **LangChain4j ToolProvider**: Provides a `ToolProvider` interface for dynamic tool selection, but it works _before_ the LLM call by analyzing the incoming user message.
+For example, "if the message contains 'booking', include booking tools." This is pre-filtering based on message content, not progressive disclosure through tool invocation.
+LangChain4j's documentation also suggests embedding-based classification, RAG over tool descriptions, or two-pass LLM selection—all requiring additional infrastructure or extra LLM calls.
 
-MatryoshkaTool takes a fundamentally different approach: *invoke to reveal*.
+UnfoldingTool takes a fundamentally different approach: *invoke to reveal*.
 Instead of searching through tool metadata, the LLM simply invokes a facade tool to unlock the tools it contains.
 
 **Beyond Search: Dynamic Tool Configuration**
 
-Crucially, MatryoshkaTool goes far beyond what any search-based approach can offer.
+Crucially, UnfoldingTool goes far beyond what any search-based approach can offer.
 Search can only *find* pre-existing tools—it cannot create new ones or modify their behavior.
-With `MatryoshkaTool.selectable()`, the selector function can:
+With `UnfoldingTool.selectable()`, the selector function can:
 
 * **Create entirely new tool instances** with different implementations based on runtime parameters
 * **Capture configuration** (connection strings, credentials, endpoints) into the tool's behavior
 * **Share mutable state** between the tools created in a single invocation
 * **Customize tool descriptions** to reflect the specific context of use
 
-For example, when an LLM invokes a "database" MatryoshkaTool with `{"connection": "prod-db.example.com"}`, the returned tools don't just have different descriptions—they have *different behavior* that operates on that specific database.
+For example, when an LLM invokes a "database" UnfoldingTool with `{"connection": "prod-db.example.com"}`, the returned tools don't just have different descriptions—they have *different behavior* that operates on that specific database.
 This is fundamentally impossible with search-based discovery, which can only return references to pre-defined tools.
 
 This provides several advantages:
 
 |===
-|Aspect |Other Approaches |MatryoshkaTool
+|Aspect |Other Approaches |UnfoldingTool
 
 |*Infrastructure*
 |Requires vector stores, embeddings, search indices, or pre-filtering logic
@@ -2937,16 +3593,16 @@ This provides several advantages:
 |Can create new tool instances with runtime-configured behavior
 |===
 
-The hierarchical nesting capability of MatryoshkaTool means you can organize thousands of tools into a logical tree structure.
+The hierarchical nesting capability of UnfoldingTool means you can organize thousands of tools into a logical tree structure.
 The LLM navigates this tree by making simple invocations, with no search overhead at any level.
 For example, a top-level "admin_operations" facade might reveal 5 category facades, each revealing 20 specific tools—giving access to 100 tools with at most 2 invocations.
 
 [NOTE]
-.MatryoshkaTool vs LlmReference
+.UnfoldingTool vs LlmReference
 ====
-Both `MatryoshkaTool` and `LlmReference` expose tools to the LLM, but they serve different purposes:
+Both `UnfoldingTool` and `LlmReference` expose tools to the LLM, but they serve different purposes:
 
-**Use MatryoshkaTool when:**
+**Use UnfoldingTool when:**
 
 * You have a single top-level capability that the LLM can invoke as one tool
 * The prompt contribution is short and can fit in the tool description
@@ -2963,6 +3619,21 @@ Both `MatryoshkaTool` and `LlmReference` expose tools to the LLM, but they serve
 
 Classes like `Memory` and `ToolishRag` implement both `Tool` and `LlmReference`, giving maximum flexibility:
 
+[tabs]
+====
+Java::
++
+[source,java]
+----
+// Use as LlmReference (adds to system prompt + tools)
+ai.withReference(memory).respond(...);
+
+// Use as Tool directly (just the tool)
+ai.withTool(memory).respond(...);
+----
+
+Kotlin::
++
 [source,kotlin]
 ----
 // Use as LlmReference (adds to system prompt + tools)
@@ -2971,16 +3642,219 @@ ai.withReference(memory).respond(...)
 // Use as Tool directly (just the tool)
 ai.withTool(memory).respond(...)
 ----
+====
 
 When used as an `LlmReference`, the `tools()` method exposes the inner tools directly.
-When used as a `Tool`, the implementation wraps them in a `MatryoshkaTool` facade.
+When used as a `Tool`, the implementation wraps them in an `UnfoldingTool` facade.
+====
+
+[[reference.tools__process-introspection]]
+==== Process Introspection Tools
+
+Embabel provides built-in `UnfoldingTool` implementations for introspecting the current agent process and its blackboard.
+These tools enable agentic workflows where the LLM can monitor its own progress, check resource usage, and access data from previous steps.
+
+===== AgentProcessTools: Runtime Awareness
+
+`AgentProcessTools` provides tools for the LLM to understand its current execution context.
+This is useful when you want an agent to be aware of its own operational status - for example, to check how much budget remains before undertaking an expensive operation, or to review what actions have been taken so far.
+
+When to use `AgentProcessTools`:
+
+* **Budget-aware agents**: Check remaining cost or token budget before expensive operations
+* **Long-running workflows**: Monitor elapsed time and action history
+* **Debugging and logging**: Understand what models and tools have been used
+* **Self-reflection**: Agents that need to reason about their own behavior
+
+**Sub-tools exposed:**
+
+|===
+|Tool Name |Purpose
+
+|`process_status`
+|Current process ID, status, running time, and goal information
+
+|`process_budget`
+|Budget limits (cost, tokens, actions) and remaining capacity
+
+|`process_cost`
+|Total cost, LLM invocation count, and detailed token usage
+
+|`process_history`
+|List of actions taken so far with execution times
+
+|`process_tools_stats`
+|Tool usage statistics (call counts per tool)
+
+|`process_models`
+|LLM models that have been invoked
+|===
+
+[tabs]
+====
+Java::
++
+[source,java]
+----
+import com.embabel.agent.tools.process.AgentProcessTools;
+import com.embabel.agent.api.tool.progressive.UnfoldingTool;
+
+// Create the tool - typically added to an agentic tool
+var processTools = new AgentProcessTools().create();
+
+// Add to SimpleAgenticTool
+var assistant = new SimpleAgenticTool("assistant", "...")
+    .withTools(processTools);
+----
+
+Kotlin::
++
+[source,kotlin]
+----
+import com.embabel.agent.tools.process.AgentProcessTools
+import com.embabel.agent.api.tool.progressive.UnfoldingTool
+
+// Create the tool - typically added to an agentic tool
+val processTools = AgentProcessTools().create()
+
+// Add to SimpleAgenticTool
+val assistant = SimpleAgenticTool("assistant", "...")
+    .withTools(processTools)
+----
+====
+
+NOTE: These tools require an active `AgentProcess` context.
+If called outside of an agent execution, they return an error message indicating no process is available.
+
+===== BlackboardTools: Accessing Workflow Data
+
+`BlackboardTools` provides tools for the LLM to access objects in the current process's blackboard.
+The blackboard is Embabel's shared context mechanism - it holds artifacts from previous actions, tool outputs (when using `ArtifactSink`), and any other objects bound to the process.
+
+When to use `BlackboardTools`:
+
+* **Multi-step workflows**: Access results from earlier actions without re-execution
+* **Tool output access**: When tools use `ArtifactSink` to publish structured data, BlackboardTools lets the LLM retrieve it
+* **Context awareness**: Let the LLM explore what data is available in the current context
+* **Debugging**: Inspect blackboard contents during development
+
+**Sub-tools exposed:**
+
+|===
+|Tool Name |Purpose
+
+|`blackboard_list`
+|List all objects in the blackboard with their types and indices
+
+|`blackboard_get`
+|Get an object by its binding name (e.g., "user", "searchResults")
+
+|`blackboard_last`
+|Get the most recent object of a given type (matches simple name or FQN)
+
+|`blackboard_describe`
+|Get a detailed description/formatting of an object by binding name
+
+|`blackboard_count`
+|Count the number of objects of a given type in the blackboard
+|===
+
+[tabs]
+====
+Java::
++
+[source,java]
+----
+import com.embabel.agent.tools.blackboard.BlackboardTools;
+import com.embabel.agent.api.tool.progressive.UnfoldingTool;
+
+// Create with default formatting
+var blackboardTools = new BlackboardTools().create();
+
+// Or with custom formatting for blackboard entries
+var blackboardTools = new BlackboardTools().create(myCustomFormatter);
+
+// Add to SimpleAgenticTool
+var assistant = new SimpleAgenticTool("assistant", "...")
+    .withTools(blackboardTools);
+----
+
+Kotlin::
++
+[source,kotlin]
+----
+import com.embabel.agent.tools.blackboard.BlackboardTools
+import com.embabel.agent.api.tool.progressive.UnfoldingTool
+
+// Create with default formatting
+val blackboardTools: UnfoldingTool= BlackboardTools().create()
+
+// Or with custom formatting for blackboard entries
+val blackboardTools = BlackboardTools().create(myCustomFormatter)
+
+// Add to SimpleAgenticTool
+val assistant = SimpleAgenticTool("assistant", "...")
+    .withTools(blackboardTools)
+----
+====
+
+**Formatting blackboard entries:**
+
+By default, `BlackboardTools` uses `DefaultBlackboardEntryFormatter` which:
+
+* Uses `infoString()` for objects implementing `HasInfoString`
+* Uses `content` property for objects implementing `HasContent`
+* Falls back to `toString()` for other objects
+
+You can provide a custom `BlackboardEntryFormatter` to control how objects are presented to the LLM.
+
+**Type matching:**
+
+The `blackboard_last` and `blackboard_count` tools match types by:
+
+* **Simple name**: `"Person"` matches any class named `Person`
+* **Fully qualified name**: `"com.example.Person"` matches that specific class
+
+This flexibility lets the LLM query by whatever name is most convenient.
+
+===== Combining Process Introspection Tools
+
+For agents that need full situational awareness, combine both tools:
+
+[tabs]
+====
+Java::
++
+[source,java]
+----
+SimpleAgenticTool awarenessAgent = new SimpleAgenticTool(
+        "aware_assistant",
+        "An assistant that can check its own status and access previous results")
+    .withTools(
+        new AgentProcessTools().create(),
+        new BlackboardTools().create()
+    );
+----
+
+Kotlin::
++
+[source,kotlin]
+----
+val awarenessAgent = SimpleAgenticTool(
+    name = "aware_assistant",
+    systemPrompt = "An assistant that can check its own status and access previous results"
+).withTools(
+    AgentProcessTools().create(),
+    BlackboardTools().create()
+)
+----
 ====
 
 [[reference.tools__mcp-tool-factory]]
 ==== McpToolFactory: MCP Tool Integration
 
 `McpToolFactory` provides a convenient way to integrate https://modelcontextprotocol.io/[Model Context Protocol (MCP)] tools into your application.
-It creates Embabel `Tool` instances from MCP servers, with support for filtering tools and wrapping them in `MatryoshkaTool` facades.
+It creates Embabel `Tool` instances from MCP servers, with support for filtering tools and wrapping them in `UnfoldingTool` facades.
 
 ===== Creating McpToolFactory
 
@@ -3022,7 +3896,8 @@ class ToolConfiguration {
 ----
 ====
 
-TIP: MCP clients are configured in `application.yml`. See <<reference.integrations__mcp,MCP Integration>> for configuration details.
+TIP: MCP clients are configured in `application.yml`.
+See <<reference.integrations__mcp,MCP Integration>> for configuration details.
 
 ===== Getting Individual MCP Tools
 
@@ -3059,9 +3934,9 @@ val requiredTool = mcpToolFactory.requiredToolByName("brave_web_search")
 ----
 ====
 
-===== Creating MatryoshkaTool Facades from MCP
+===== Creating UnfoldingToolFacades from MCP
 
-`McpToolFactory` can wrap groups of MCP tools in a `MatryoshkaTool` facade for progressive disclosure.
+`McpToolFactory` can wrap groups of MCP tools in an `UnfoldingTool` facade for progressive disclosure.
 This is useful when you have many MCP tools but want to present them as logical categories.
 
 **By Exact Tool Names:**
@@ -3072,8 +3947,8 @@ Java::
 +
 [source,java]
 ----
-// Create a MatryoshkaTool with specific tool names
-MatryoshkaTool wikipediaTool = mcpToolFactory.matryoshkaByName(
+// Create a UnfoldingTool with specific tool names
+var wikipediaTool = mcpToolFactory.unfoldingByName(
     "wikipedia",
     "Search and find content from Wikipedia",
     Set.of("search_wikipedia", "get_article", "get_related_topics", "get_summary")
@@ -3084,8 +3959,8 @@ Kotlin::
 +
 [source,kotlin]
 ----
-// Create a MatryoshkaTool with specific tool names
-val wikipediaTool = mcpToolFactory.matryoshkaByName(
+// Create a UnfoldingTool with specific tool names
+val wikipediaTool = mcpToolFactory.unfoldingByName(
     name = "wikipedia",
     description = "Search and find content from Wikipedia",
     toolNames = setOf("search_wikipedia", "get_article", "get_related_topics", "get_summary")
@@ -3104,7 +3979,7 @@ Java::
 import java.util.regex.Pattern;
 
 // Match tools by regex patterns
-MatryoshkaTool dbTool = mcpToolFactory.matryoshkaMatching(
+var dbTool = mcpToolFactory.unfoldingMatching(
     "database_operations",
     "Database operations. Invoke to access database tools.",
     List.of(Pattern.compile("^db_.*"), Pattern.compile(".*query.*"))
@@ -3116,7 +3991,7 @@ Kotlin::
 [source,kotlin]
 ----
 // Match tools by regex patterns
-val dbTool = mcpToolFactory.matryoshkaMatching(
+val dbTool = mcpToolFactory.unfoldingMatching(
     name = "database_operations",
     description = "Database operations. Invoke to access database tools.",
     patterns = listOf("^db_".toRegex(), "query.*".toRegex())
@@ -3133,7 +4008,7 @@ Java::
 [source,java]
 ----
 // Custom filter predicate
-MatryoshkaTool webTool = mcpToolFactory.matryoshka(
+var webTool = mcpToolFactory.unfolding(
     "web_operations",
     "Web operations. Invoke to access web tools.",
     callback -> callback.getToolDefinition().name().startsWith("web_")
@@ -3145,7 +4020,7 @@ Kotlin::
 [source,kotlin]
 ----
 // Custom filter predicate
-val webTool = mcpToolFactory.matryoshka(
+val webTool = mcpToolFactory.unfolding(
     name = "web_operations",
     description = "Web operations. Invoke to access web tools.",
     filter = { it.toolDefinition.name().startsWith("web_") }
@@ -3155,7 +4030,7 @@ val webTool = mcpToolFactory.matryoshka(
 
 ===== Controlling Facade Removal
 
-By default, `MatryoshkaTool` facades created by `McpToolFactory` are removed after invocation (replaced by inner tools).
+By default, `UnfoldingTool` facades created by `McpToolFactory` are removed after invocation (replaced by inner tools).
 Use `removeOnInvoke = false` to keep the facade:
 
 [tabs]
@@ -3165,7 +4040,7 @@ Java::
 [source,java]
 ----
 // Keep facade even after invocation
-MatryoshkaTool persistentTool = mcpToolFactory.matryoshkaByName(
+var persistentTool = mcpToolFactory.unfoldingByName(
     "wikipedia",
     "Search Wikipedia",
     Set.of("search_wikipedia", "get_article"),
@@ -3178,7 +4053,7 @@ Kotlin::
 [source,kotlin]
 ----
 // Keep facade even after invocation
-val persistentTool = mcpToolFactory.matryoshkaByName(
+val persistentTool = mcpToolFactory.unfoldingByName(
     name = "wikipedia",
     description = "Search Wikipedia",
     toolNames = setOf("search_wikipedia", "get_article"),
@@ -3216,8 +4091,8 @@ public class ChatConfiguration {
             tools.add(braveSearch.withNote(deferMessage));
         }
 
-        // MatryoshkaTool grouping related Wikipedia MCP tools
-        var wikipediaTool = mcpToolFactory.matryoshkaByName(
+        // UnfoldingTool grouping related Wikipedia MCP tools
+        var wikipediaTool = mcpToolFactory.unfoldingByName(
             "wikipedia",
             "Search and find content from Wikipedia: " + deferMessage,
             Set.of("search_wikipedia", "get_article", "get_related_topics", "get_summary")
@@ -3252,8 +4127,8 @@ class ChatConfiguration {
             tools.add(braveSearch.withNote(deferMessage))
         }
 
-        // MatryoshkaTool grouping related Wikipedia MCP tools
-        val wikipediaTool = mcpToolFactory.matryoshkaByName(
+        // UnfoldingTool grouping related Wikipedia MCP tools
+        val wikipediaTool = mcpToolFactory.unfoldingByName(
             name = "wikipedia",
             description = "Search and find content from Wikipedia: $deferMessage",
             toolNames = setOf("search_wikipedia", "get_article", "get_related_topics", "get_summary")
@@ -3271,7 +4146,7 @@ class ChatConfiguration {
 This pattern:
 
 * **Gracefully degrades** when MCP tools aren't available (e.g., in test environments)
-* **Groups related tools** behind a descriptive facade using `MatryoshkaTool`
+* **Groups related tools** behind a descriptive facade using `UnfoldingTool`
 * **Adds usage hints** with `withNote()` to guide the LLM on when to use external tools
 * **Checks for empty results** before adding tools to avoid empty facades
 
@@ -3286,12 +4161,12 @@ This pattern:
 |`requiredToolByName(String)`
 |Get a single MCP tool by exact name. Throws `IllegalArgumentException` if not found, with a helpful error message listing available tools.
 
-|`matryoshkaByName(name, description, toolNames, removeOnInvoke?)`
-|Create a `MatryoshkaTool` containing tools with exact matching names.
+|`unfoldingByName(name, description, toolNames, removeOnInvoke?)`
+|Create an `UnfoldingTool` containing tools with exact matching names.
 
-|`matryoshkaMatching(name, description, patterns, removeOnInvoke?)`
-|Create a `MatryoshkaTool` containing tools matching any of the regex patterns.
+|`unfoldingMatching(name, description, patterns, removeOnInvoke?)`
+|Create an `UnfoldingTool` containing tools matching any of the regex patterns.
 
-|`matryoshka(name, description, filter, removeOnInvoke?)`
-|Create a `MatryoshkaTool` with a custom filter predicate.
+|`unfolding(name, description, filter, removeOnInvoke?)`
+|Create an `UnfoldingTool` with a custom filter predicate.
 |===

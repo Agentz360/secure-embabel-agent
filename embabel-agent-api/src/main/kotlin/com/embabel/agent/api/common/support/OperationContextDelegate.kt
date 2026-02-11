@@ -15,9 +15,14 @@
  */
 package com.embabel.agent.api.common.support
 
-import com.embabel.agent.api.common.*
+import com.embabel.agent.api.common.ActionContext
+import com.embabel.agent.api.common.AgentImage
+import com.embabel.agent.api.common.ContextualPromptElement
+import com.embabel.agent.api.common.InteractionId
+import com.embabel.agent.api.common.OperationContext
 import com.embabel.agent.api.common.support.streaming.StreamingCapabilityDetector
 import com.embabel.agent.api.tool.Tool
+import com.embabel.agent.api.tool.ToolObject
 import com.embabel.agent.api.validation.guardrails.GuardRail
 import com.embabel.agent.core.ToolGroup
 import com.embabel.agent.core.ToolGroupRequirement
@@ -42,6 +47,7 @@ import com.embabel.common.textio.template.TemplateRenderer
 import com.embabel.common.util.loggerFor
 import com.fasterxml.jackson.databind.ObjectMapper
 import reactor.core.publisher.Flux
+import java.util.concurrent.atomic.AtomicLong
 import java.util.function.Predicate
 
 /**
@@ -188,7 +194,11 @@ internal data class OperationContextDelegate(
     private fun idForPrompt(
         outputClass: Class<*>,
     ): InteractionId {
-        return InteractionId("${context.operation.name}-${outputClass.name}")
+        return InteractionId("${context.operation.name}-${outputClass.name}-${callCounter.incrementAndGet()}")
+    }
+
+    companion object {
+        private val callCounter = AtomicLong(0)
     }
 
     /**
@@ -288,7 +298,9 @@ internal data class OperationContextDelegate(
             messages = combinedMessages,
             interaction = thinkingInteraction(),
             outputClass = outputClass,
-            llmRequestEvent = null
+            llmRequestEvent = null,
+            agentProcess = context.agentProcess,
+            action = action,
         )
     }
 
@@ -302,7 +314,9 @@ internal data class OperationContextDelegate(
             messages = combinedMessages,
             interaction = thinkingInteraction(),
             outputClass = outputClass,
-            llmRequestEvent = null
+            llmRequestEvent = null,
+            agentProcess = context.agentProcess,
+            action = action,
         )
 
         return when {

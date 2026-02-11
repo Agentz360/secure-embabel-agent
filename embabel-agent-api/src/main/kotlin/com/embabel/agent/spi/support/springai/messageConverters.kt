@@ -41,7 +41,7 @@ fun Message.toSpringAiMessage(): SpringAiMessage {
                 )
             }
             SpringAiAssistantMessage.builder()
-                .content(this.textContent)
+                .content(this.content)
                 .toolCalls(springToolCalls)
                 .build()
         }
@@ -50,15 +50,15 @@ fun Message.toSpringAiMessage(): SpringAiMessage {
             val toolResponse = ToolResponseMessage.ToolResponse(
                 this.toolCallId,
                 this.toolName,
-                this.textContent
+                this.content
             )
             ToolResponseMessage.builder().responses(listOf(toolResponse)).metadata(metadata).build()
         }
 
-        is AssistantMessage -> SpringAiAssistantMessage(this.textContent)
+        is AssistantMessage -> SpringAiAssistantMessage(this.content)
 
         is SystemMessage -> SpringAiSystemMessage.builder()
-            .text(this.textContent)
+            .text(this.content)
             .metadata(metadata)
             .build()
 
@@ -79,7 +79,7 @@ fun Message.toSpringAiMessage(): SpringAiMessage {
             }
 
             // Set text content (concatenate all text parts, or use empty string for image-only)
-            val textContent = this.textContent.ifEmpty { " " } // Spring AI requires non-empty text
+            val textContent = this.content.ifEmpty { " " } // Spring AI requires non-empty text
             builder.text(textContent)
 
             // Add all media as a single list
@@ -89,7 +89,36 @@ fun Message.toSpringAiMessage(): SpringAiMessage {
 
             builder.metadata(metadata).build()
         }
+
+        else -> throw IllegalArgumentException("Unsupported message type: ${this::class.simpleName}")
     }
+}
+
+/**
+ * Merge consecutive [ToolResponseMessage] entries into a single message
+ * containing all [ToolResponseMessage.ToolResponse] entries.
+ * Required by Gemini, which expects all function responses for a single
+ * tool-calling turn to be in one Content/message.
+ */
+internal fun List<SpringAiMessage>.mergeConsecutiveToolResponses(): List<SpringAiMessage> {
+    if (isEmpty()) return emptyList()
+    val result = mutableListOf<SpringAiMessage>()
+    var pendingResponses = mutableListOf<ToolResponseMessage.ToolResponse>()
+    for (message in this) {
+        if (message is ToolResponseMessage) {
+            pendingResponses.addAll(message.responses)
+        } else {
+            if (pendingResponses.isNotEmpty()) {
+                result.add(ToolResponseMessage.builder().responses(pendingResponses).build())
+                pendingResponses = mutableListOf()
+            }
+            result.add(message)
+        }
+    }
+    if (pendingResponses.isNotEmpty()) {
+        result.add(ToolResponseMessage.builder().responses(pendingResponses).build())
+    }
+    return result
 }
 
 /**

@@ -16,6 +16,7 @@
 package com.embabel.agent.spi.loop.support
 
 import com.embabel.agent.api.tool.Tool
+import com.embabel.agent.api.tool.ToolControlFlowSignal
 import com.embabel.agent.core.BlackboardUpdater
 import com.embabel.agent.core.ReplanRequestedException
 import com.embabel.agent.core.Usage
@@ -45,7 +46,7 @@ import org.slf4j.LoggerFactory
  * This ensures injected tools (e.g., from MatryoshkaTool) receive the same decoration
  * as initial tools, including event publication, observability, and error handling.
  */
-internal class DefaultToolLoop(
+internal open class DefaultToolLoop(
     private val llmMessageSender: LlmMessageSender,
     private val objectMapper: ObjectMapper,
     private val injectionStrategy: ToolInjectionStrategy = ToolInjectionStrategy.NONE,
@@ -85,13 +86,10 @@ internal class DefaultToolLoop(
             }
 
             val assistantMessage = callResult.message as AssistantMessageWithToolCalls
-            for (toolCall in assistantMessage.toolCalls) {
-                val shouldContinue = processToolCall(toolCall, state)
-                if (!shouldContinue) {
-                    // Tool requested replan - terminate loop gracefully
-                    logger.info("Tool loop terminated for replan after {} iterations", state.iterations)
-                    return buildResult("", outputParser, state)
-                }
+            val shouldContinue = processToolCalls(assistantMessage.toolCalls, state)
+            if (!shouldContinue) {
+                logger.info("Tool loop terminated for replan after {} iterations", state.iterations)
+                return buildResult("", outputParser, state)
             }
         }
 
@@ -133,9 +131,28 @@ internal class DefaultToolLoop(
     )
 
     /**
-     * Process a tool call, returning true if the loop should continue, false if replan was requested.
+     * Process all tool calls from a single LLM response.
+     * Override to change execution strategy (e.g., parallel execution).
+     *
+     * @param toolCalls the tool calls to process
+     * @param state the current loop state
+     * @return true if loop should continue, false if replan was requested
      */
-    private fun processToolCall(
+    protected open fun processToolCalls(
+        toolCalls: List<ToolCall>,
+        state: LoopState,
+    ): Boolean {
+        for (toolCall in toolCalls) {
+            val shouldContinue = processToolCall(toolCall, state)
+            if (!shouldContinue) return false
+        }
+        return true
+    }
+
+    /**
+     * Process a single tool call.
+     */
+    protected fun processToolCall(
         toolCall: ToolCall,
         state: LoopState,
     ): Boolean {
@@ -153,10 +170,16 @@ internal class DefaultToolLoop(
             state.replanReason = e.reason
             state.blackboardUpdater = e.blackboardUpdater
             false
+        } catch (e: Exception) {
+            if (e is ToolControlFlowSignal) {
+                // Other control flow signals (e.g., UserInputRequiredException) must propagate
+                throw e
+            }
+            throw e
         }
     }
 
-    private fun executeToolCall(
+    protected fun executeToolCall(
         tool: Tool,
         toolCall: ToolCall,
     ): String {
@@ -168,7 +191,7 @@ internal class DefaultToolLoop(
         }
     }
 
-    private fun applyInjectionStrategy(
+    protected fun applyInjectionStrategy(
         toolCall: ToolCall,
         resultContent: String,
         state: LoopState,
@@ -228,7 +251,7 @@ internal class DefaultToolLoop(
         )
     }
 
-    private fun addToolResultToHistory(
+    protected fun addToolResultToHistory(
         toolCall: ToolCall,
         resultContent: String,
         state: LoopState,
@@ -242,7 +265,7 @@ internal class DefaultToolLoop(
         )
     }
 
-    private class LoopState(
+    protected class LoopState(
         val conversationHistory: MutableList<Message>,
         val availableTools: MutableList<Tool>,
         val injectedTools: MutableList<Tool> = mutableListOf(),
@@ -257,7 +280,7 @@ internal class DefaultToolLoop(
     /**
      * Find a tool by name.
      */
-    private fun findTool(tools: List<Tool>, name: String): Tool? {
+    protected fun findTool(tools: List<Tool>, name: String): Tool? {
         return tools.find { it.definition.name == name }
     }
 

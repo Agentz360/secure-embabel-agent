@@ -42,6 +42,8 @@ import com.embabel.agent.api.event.ReplanRequestedEvent
 import com.embabel.agent.api.event.StateTransitionEvent
 import com.embabel.agent.api.event.ToolCallRequestEvent
 import com.embabel.agent.api.event.ToolCallResponseEvent
+import com.embabel.agent.api.event.ToolLoopCompletedEvent
+import com.embabel.agent.api.event.ToolLoopStartEvent
 import com.embabel.agent.core.AgentProcessStatusCode
 import com.embabel.agent.core.EarlyTermination
 import com.embabel.agent.spi.logging.personality.severance.LumonColorPalette
@@ -189,9 +191,9 @@ open class LoggingAgenticEventListener(
 
     protected open fun getAgentProcessPlanFormulatedEventMessage(e: AgentProcessPlanFormulatedEvent): String =
         """|[${e.processId}] formulated plan:
-           |${e.plan.infoString(e.agentProcess.processContext.processOptions.verbosity.showLongPlans, 1)}
+           |${e.plan.infoString(e.agentProcess.processOptions.verbosity.showLongPlans, 1)}
            |from:
-           |${e.worldState.infoString(verbose = true, indent = 1)}
+           |${e.worldState.infoString(verbose = e.agentProcess.processOptions.verbosity.showLongPlans, indent = 1)}
            |"""
             .trimMargin()
             .indentLines(level = 1, skipIndentFirstLine = true)
@@ -295,6 +297,12 @@ open class LoggingAgenticEventListener(
 
     protected open fun getActionExecutionResultMessage(e: ActionExecutionResultEvent): String =
         "[${e.processId}] executed action ${e.action.name} in ${e.actionStatus.runningTime}"
+
+    protected open fun getToolLoopStartMessage(e: ToolLoopStartEvent): String =
+        "[${e.processId}] (${e.action?.shortName()}) starting tool loop [${e.toolNames.joinToString(", ")}] max=${e.maxIterations}"
+
+    protected open fun getToolLoopCompletedMessage(e: ToolLoopCompletedEvent): String =
+        "[${e.processId}] (${e.action?.shortName()}) tool loop completed in ${e.runningTime.toMillis()}ms iterations=${e.totalIterations} replan=${e.replanRequested}"
 
     protected open fun getProgressUpdateEventMessage(e: ProgressUpdateEvent): String =
         "[${e.processId}] progress: ${e.createProgressBar(length = 50).color(LumonColorPalette.MEMBRANE)}"
@@ -410,6 +418,14 @@ open class LoggingAgenticEventListener(
 
             is ActionExecutionResultEvent -> {
                 logger.info(getActionExecutionResultMessage(event))
+            }
+
+            is ToolLoopStartEvent -> {
+                logger.info(getToolLoopStartMessage(event))
+            }
+
+            is ToolLoopCompletedEvent -> {
+                logger.info(getToolLoopCompletedMessage(event))
             }
 
             is ProgressUpdateEvent -> {

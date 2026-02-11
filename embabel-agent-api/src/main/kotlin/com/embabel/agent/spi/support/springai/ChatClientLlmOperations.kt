@@ -16,16 +16,17 @@
 package com.embabel.agent.spi.support.springai
 
 import com.embabel.agent.api.event.LlmRequestEvent
+import com.embabel.agent.api.tool.Tool
+import com.embabel.agent.core.Action
+import com.embabel.agent.core.AgentProcess
 import com.embabel.agent.core.support.LlmInteraction
 import com.embabel.agent.core.support.toEmbabelUsage
 import com.embabel.agent.spi.AutoLlmSelectionCriteriaResolver
 import com.embabel.agent.spi.LlmService
 import com.embabel.agent.spi.ToolDecorator
 import com.embabel.agent.spi.loop.LlmMessageSender
-import com.embabel.agent.spi.support.LlmDataBindingProperties
-import com.embabel.agent.spi.support.LlmOperationsPromptsProperties
-import com.embabel.agent.spi.support.OutputConverter
-import com.embabel.agent.spi.support.ToolLoopLlmOperations
+import com.embabel.agent.spi.loop.ToolLoopFactory
+import com.embabel.agent.spi.support.*
 import com.embabel.agent.spi.support.guardrails.validateAssistantResponse
 import com.embabel.agent.spi.support.guardrails.validateUserInput
 import com.embabel.agent.spi.validation.DefaultValidationPromptGenerator
@@ -98,6 +99,7 @@ internal class ChatClientLlmOperations(
     objectMapper: ObjectMapper = jacksonObjectMapper().registerModule(JavaTimeModule()),
     observationRegistry: ObservationRegistry = ObservationRegistry.NOOP,
     private val customizers: List<ChatClientCustomizer> = emptyList(),
+    toolLoopFactory: ToolLoopFactory = ToolLoopFactory.default(),
 ) : ToolLoopLlmOperations(
     toolDecorator = toolDecorator,
     modelProvider = modelProvider,
@@ -108,6 +110,7 @@ internal class ChatClientLlmOperations(
     promptsProperties = llmOperationsPromptsProperties,
     objectMapper = objectMapper,
     observationRegistry = observationRegistry,
+    toolLoopFactory = toolLoopFactory,
 ) {
 
     @PostConstruct
@@ -434,6 +437,8 @@ internal class ChatClientLlmOperations(
         interaction: LlmInteraction,
         outputClass: Class<O>,
         llmRequestEvent: LlmRequestEvent<O>?,
+        agentProcess: AgentProcess?,
+        action: Action?,
     ): ThinkingResponse<O> {
         logger.debug("LLM transform for interaction {} with thinking extraction", interaction.id.value)
 
@@ -481,6 +486,9 @@ internal class ChatClientLlmOperations(
         val chatOptions = requireSpringAiLlm(llm).optionsConverter.convertOptions(interaction.llm)
         val timeoutMillis = getTimeoutMillis(interaction.llm)
 
+        // Resolve tool groups and decorate tools
+        val tools = resolveAndDecorateTools(interaction, agentProcess, action)
+
         return dataBindingProperties.retryTemplate(interaction.id.value)
             .execute<ThinkingResponse<O>, DatabindException> {
                 val attempt = (RetrySynchronizationManager.getContext()?.retryCount ?: 0) + 1
@@ -488,7 +496,7 @@ internal class ChatClientLlmOperations(
                 val future = CompletableFuture.supplyAsync {
                     chatClient
                         .prompt(springAiPrompt)
-                        .toolCallbacks(interaction.tools.toSpringToolCallbacks())
+                        .toolCallbacks(tools.toSpringToolCallbacks())
                         .options(chatOptions)
                         .call()
                 }
@@ -572,6 +580,8 @@ internal class ChatClientLlmOperations(
         interaction: LlmInteraction,
         outputClass: Class<O>,
         llmRequestEvent: LlmRequestEvent<O>?,
+        agentProcess: AgentProcess?,
+        action: Action?,
     ): Result<ThinkingResponse<O>> {
         return try {
             val maybeReturnPromptContribution = templateRenderer.renderLoadedTemplate(
@@ -626,12 +636,15 @@ internal class ChatClientLlmOperations(
             val chatOptions = requireSpringAiLlm(llm).optionsConverter.convertOptions(interaction.llm)
             val timeoutMillis = getTimeoutMillis(interaction.llm)
 
+            // Resolve tool groups and decorate tools
+            val tools = resolveAndDecorateTools(interaction, agentProcess, action)
+
             val result = dataBindingProperties.retryTemplate(interaction.id.value)
                 .execute<Result<ThinkingResponse<O>>, DatabindException> {
                     val future = CompletableFuture.supplyAsync {
                         chatClient
                             .prompt(springAiPrompt)
-                            .toolCallbacks(interaction.tools.toSpringToolCallbacks())
+                            .toolCallbacks(tools.toSpringToolCallbacks())
                             .options(chatOptions)
                             .call()
                     }
@@ -1017,6 +1030,26 @@ internal class ChatClientLlmOperations(
             }
         }
     }
+
+    // ====================================
+    // TOOL RESOLUTION
+    // ====================================
+
+    /**
+     * Resolves ToolGroups and decorates all tools for streaming operations.
+     * Convenience wrapper around [ToolResolutionHelper.resolveAndDecorate].
+     * When agentProcess is null, returns interaction.tools without decoration.
+     */
+    internal fun resolveAndDecorateTools(
+        interaction: LlmInteraction,
+        agentProcess: AgentProcess?,
+        action: Action?,
+    ): List<Tool> = ToolResolutionHelper.resolveAndDecorate(
+        interaction = interaction,
+        agentProcess = agentProcess,
+        action = action,
+        toolDecorator = toolDecorator,
+    )
 }
 
 /**
